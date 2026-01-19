@@ -1,7 +1,9 @@
 # DrHyper API Client
 
+from typing import Any
+
 import httpx
-from typing import Optional, List, Dict, Any
+
 from ..config import DRHYPER_API_BASE, DRHYPER_API_KEY
 
 
@@ -18,9 +20,9 @@ class DrHyperClient:
 
     async def init_conversation(
         self,
-        patient_info: Dict[str, Any],
+        patient_info: dict[str, Any],
         target: str = "diagnosis"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Initialize a new conversation with DrHyper
 
@@ -48,8 +50,8 @@ class DrHyperClient:
         self,
         conversation_id: str,
         message: str,
-        image_refs: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        image_refs: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Send a message in the conversation
 
@@ -75,7 +77,7 @@ class DrHyperClient:
             response.raise_for_status()
             return response.json()
 
-    async def get_conversation(self, conversation_id: str) -> Dict[str, Any]:
+    async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         """
         Get conversation details
 
@@ -94,7 +96,7 @@ class DrHyperClient:
             response.raise_for_status()
             return response.json()
 
-    async def upload_image(self, image_path: str) -> Dict[str, Any]:
+    async def upload_image(self, image_path: str) -> dict[str, Any]:
         """
         Upload an image for analysis
 
@@ -120,8 +122,8 @@ class DrHyperClient:
         self,
         image_path: str,
         query: str,
-        patient_context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        patient_context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Analyze a medical image
 

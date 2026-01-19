@@ -1,16 +1,15 @@
 # Main Streamlit Application
 
-import streamlit as st
-from streamlit_option_menu import option_menu
 import sys
 from pathlib import Path
+
+import streamlit as st
+from streamlit_option_menu import option_menu
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from frontend.config import (
-    PAGE_TITLE, PAGE_LAYOUT, PAGE_ICON
-)
+from frontend.config import PAGE_ICON, PAGE_LAYOUT, PAGE_TITLE
 from frontend.utils.helpers import initialize_session_state
 
 

@@ -1,22 +1,21 @@
 # Chat Page - Main consultation interface
 
-import streamlit as st
 import sys
 from pathlib import Path
-from typing import Dict, Any
+
+import streamlit as st
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from frontend.utils.helpers import (
-    initialize_session_state,
-    patient_info_form,
-    display_patient_info,
-    display_message,
-    reset_conversation
-)
+from frontend.config import MAX_IMAGE_SIZE_MB, SUPPORTED_IMAGE_TYPES
 from frontend.utils.drhyper_client import DrHyperClient
-from frontend.config import SUPPORTED_IMAGE_TYPES, MAX_IMAGE_SIZE_MB
+from frontend.utils.helpers import (
+    display_message,
+    display_patient_info,
+    patient_info_form,
+    reset_conversation,
+)
 
 
 def chat_page():

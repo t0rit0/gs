@@ -1,9 +1,9 @@
 # Helper utilities
 
-import streamlit as st
-from typing import Dict, Any, List, Optional
 from datetime import datetime
-import json
+from typing import Any
+
+import streamlit as st
 
 
 def format_timestamp(timestamp: str) -> str:
@@ -11,11 +11,11 @@ def format_timestamp(timestamp: str) -> str:
     try:
         dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except:
+    except (ValueError, TypeError):
         return timestamp
 
 
-def display_message(role: str, content: str, timestamp: Optional[str] = None):
+def display_message(role: str, content: str, timestamp: str | None = None):
     """
     Display a chat message with proper styling
 
@@ -36,7 +36,7 @@ def display_message(role: str, content: str, timestamp: Optional[str] = None):
                 st.caption(f"回复时间: {format_timestamp(timestamp)}")
 
 
-def display_image_with_metadata(image_path: str, metadata: Optional[Dict[str, Any]] = None):
+def display_image_with_metadata(image_path: str, metadata: dict[str, Any] | None = None):
     """
     Display an image with metadata
 
@@ -71,7 +71,7 @@ def reset_conversation():
     st.session_state.messages = []
 
 
-def patient_info_form() -> Dict[str, Any]:
+def patient_info_form() -> dict[str, Any]:
     """
     Create patient information input form
 
@@ -113,7 +113,7 @@ def patient_info_form() -> Dict[str, Any]:
         return None
 
 
-def display_patient_info(patient_info: Dict[str, Any]):
+def display_patient_info(patient_info: dict[str, Any]):
     """
     Display patient information in a formatted way
 
