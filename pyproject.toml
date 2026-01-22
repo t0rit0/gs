@@ -16,6 +16,13 @@ dependencies = [
     "python-igraph==0.11.9",
     "transformers==4.50.0",
     "uvicorn==0.35.0",
+    # Frontend dependencies
+    "streamlit==1.41.0",
+    "streamlit-option-menu==0.4.0",
+    "httpx==0.28.1",
+    "requests==2.32.3",
+    "pillow==11.1.0",
+    "scipy>=1.17.0",
 ]
 
 [dependency-groups]
