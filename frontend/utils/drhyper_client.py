@@ -3,151 +3,182 @@
 from typing import Any
 
 import httpx
+import requests
 
-from ..config import DRHYPER_API_BASE, DRHYPER_API_KEY
+from ..config import DRHYPER_API_BASE
 
 
 class DrHyperClient:
     """Client for interacting with DrHyper API"""
 
-    def __init__(self, api_key: str = DRHYPER_API_KEY, base_url: str = DRHYPER_API_BASE):
-        self.api_key = api_key
+    def __init__(self, base_url: str = DRHYPER_API_BASE):
         self.base_url = base_url.rstrip('/')
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
+        # Use synchronous requests for Streamlit compatibility
+        self.timeout = 120.0
 
-    async def init_conversation(
+    def init_conversation(
         self,
         patient_info: dict[str, Any],
-        target: str = "diagnosis"
+        model: str = "DrHyper"
     ) -> dict[str, Any]:
         """
         Initialize a new conversation with DrHyper
 
         Args:
-            patient_info: Patient information dict
-            target: Conversation target (diagnosis, followup, etc.)
+            patient_info: Patient information dict with keys: name, age, gender
+            model: Model to use (default: "DrHyper")
 
         Returns:
-            Conversation initialization response
+            Conversation initialization response with conversation_id and ai_message
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/api/conversation/init",
-                headers=self.headers,
-                json={
-                    "patient_info": patient_info,
-                    "target": target
-                },
-                timeout=30.0
-            )
-            response.raise_for_status()
-            return response.json()
+        response = requests.post(
+            f"{self.base_url}/init_conversation",
+            json={
+                "name": patient_info.get("name"),
+                "age": patient_info.get("age"),
+                "gender": patient_info.get("gender"),
+                "model": model
+            },
+            timeout=self.timeout
+        )
+        response.raise_for_status()
+        return response.json()
 
-    async def chat(
+    def chat(
         self,
         conversation_id: str,
         message: str,
-        image_refs: list[str] | None = None
+        images: list[str] | None = None
     ) -> dict[str, Any]:
         """
-        Send a message in the conversation
+        Send a message in the conversation with optional images
 
         Args:
             conversation_id: Conversation ID
             message: User message
-            image_refs: Optional list of image references
+            images: Optional list of base64-encoded images (format: "data:image/type;base64,...")
 
         Returns:
-            Chat response with AI reply
+            Chat response with ai_message and accomplish status
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/api/conversation/chat",
-                headers=self.headers,
-                json={
-                    "conversation_id": conversation_id,
-                    "message": message,
-                    "image_refs": image_refs or []
-                },
-                timeout=60.0
-            )
-            response.raise_for_status()
-            return response.json()
+        payload = {
+            "conversation_id": conversation_id,
+            "human_message": message
+        }
 
-    async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        # Only include images if they exist
+        if images:
+            payload["images"] = images
+
+        response = requests.post(
+            f"{self.base_url}/chat",
+            json=payload,
+            timeout=self.timeout
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def end_conversation(
+        self,
+        conversation_id: str,
+        in_memory: bool = False
+    ) -> dict[str, Any]:
         """
-        Get conversation details
+        End a conversation
+
+        Args:
+            conversation_id: Conversation ID
+            in_memory: Whether to keep in memory after ending
+
+        Returns:
+            End conversation response
+        """
+        response = requests.post(
+            f"{self.base_url}/end_conversation",
+            json={
+                "conversation_id": conversation_id,
+                "in_memory": in_memory
+            },
+            timeout=30.0
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def save_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """
+        Save a conversation to disk
 
         Args:
             conversation_id: Conversation ID
 
         Returns:
-            Conversation details
+            Save conversation response
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/api/conversation/{conversation_id}",
-                headers=self.headers,
-                timeout=10.0
-            )
-            response.raise_for_status()
-            return response.json()
+        response = requests.post(
+            f"{self.base_url}/save_conversation",
+            params={"conversation_id": conversation_id},
+            timeout=30.0
+        )
+        response.raise_for_status()
+        return response.json()
 
-    async def upload_image(self, image_path: str) -> dict[str, Any]:
+    def load_conversation(self, conversation_id: str) -> dict[str, Any]:
         """
-        Upload an image for analysis
+        Load a conversation from disk
 
         Args:
-            image_path: Path to image file
+            conversation_id: Conversation ID
 
         Returns:
-            Image upload response with reference
+            Load conversation response
         """
-        async with httpx.AsyncClient() as client:
-            with open(image_path, 'rb') as f:
-                files = {'file': f}
-                response = await client.post(
-                    f"{self.base_url}/api/images/upload",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    files=files,
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                return response.json()
+        response = requests.post(
+            f"{self.base_url}/load_conversation",
+            params={"conversation_id": conversation_id},
+            timeout=30.0
+        )
+        response.raise_for_status()
+        return response.json()
 
-    async def analyze_image(
+    def list_conversations(self) -> dict[str, Any]:
+        """
+        List all conversations
+
+        Returns:
+            Dict with in_memory and on_disk conversation lists
+        """
+        response = requests.get(
+            f"{self.base_url}/list_conversations",
+            timeout=30.0
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def update_settings(
         self,
-        image_path: str,
-        query: str,
-        patient_context: dict[str, Any] | None = None
+        component: str,
+        parameter: str,
+        value: Any
     ) -> dict[str, Any]:
         """
-        Analyze a medical image
+        Update system settings
 
         Args:
-            image_path: Path to image file
-            query: Analysis query
-            patient_context: Optional patient context
+            component: Component to update (e.g., "SYSTEM", "GRAPH")
+            parameter: Parameter name
+            value: New value
 
         Returns:
-            Image analysis result
+            Update settings response
         """
-        async with httpx.AsyncClient() as client:
-            with open(image_path, 'rb') as f:
-                files = {'file': f}
-                data = {
-                    'query': query,
-                    'patient_context': str(patient_context) if patient_context else ''
-                }
-                response = await client.post(
-                    f"{self.base_url}/api/images/analyze",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    files=files,
-                    data=data,
-                    timeout=60.0
-                )
-                response.raise_for_status()
-                return response.json()
+        response = requests.post(
+            f"{self.base_url}/update_settings",
+            json={
+                "component": component,
+                "parameter": parameter,
+                "value": value
+            },
+            timeout=30.0
+        )
+        response.raise_for_status()
+        return response.json()

@@ -64,11 +64,35 @@ def initialize_session_state():
     if 'current_patient_id' not in st.session_state:
         st.session_state.current_patient_id = None
 
+    # Image panel states
+    if 'image_panel_open' not in st.session_state:
+        st.session_state.image_panel_open = False
+
+    if 'uploaded_image' not in st.session_state:
+        st.session_state.uploaded_image = None
+
+    if 'image_analysis_report' not in st.session_state:
+        st.session_state.image_analysis_report = None
+
+    if 'thumbnail_visible' not in st.session_state:
+        st.session_state.thumbnail_visible = False
+
+    if 'last_processed_image' not in st.session_state:
+        st.session_state.last_processed_image = None
+
 
 def reset_conversation():
-    """Reset conversation state"""
+    """Reset conversation state including image panel"""
     st.session_state.conversation_id = None
     st.session_state.messages = []
+    st.session_state.patient_info = {}
+    st.session_state.current_patient_id = None
+    # Reset image panel states
+    st.session_state.image_panel_open = False
+    st.session_state.uploaded_image = None
+    st.session_state.image_analysis_report = None
+    st.session_state.thumbnail_visible = False
+    st.session_state.last_processed_image = None
 
 
 def patient_info_form() -> dict[str, Any]:
