@@ -1,7 +1,8 @@
 # Settings Page
 
-import streamlit as st
 import os
+
+import streamlit as st
 
 
 def settings_page():

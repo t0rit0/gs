@@ -2,7 +2,6 @@
 
 from typing import Any
 
-import httpx
 import requests
 
 from ..config import DRHYPER_API_BASE

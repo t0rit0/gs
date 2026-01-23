@@ -1,10 +1,8 @@
 # Chat Page - Split-pane interface with medical image analysis
 
 import base64
-import io
 import sys
 from pathlib import Path
-from typing import Any
 
 import streamlit as st
 
@@ -245,16 +243,15 @@ def display_chat_interface():
     # Input section with image upload
     col1, col2 = st.columns([2, 1])
 
-    with col1:
-        # Text input and file upload in the same form
-        with st.form("chat_form", clear_on_submit=True):
-            user_input = st.text_area(
-                "消息输入 / Message Input",
-                placeholder="请输入您的症状、问题或回复... / Enter your symptoms, questions, or responses...",
-                height=100,
-                label_visibility="collapsed"
-            )
-            submit = st.form_submit_button("发送 / Send", type="primary", use_container_width=True)
+    # Text input and file upload in the same form
+    with col1, st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_area(
+            "消息输入 / Message Input",
+            placeholder="请输入您的症状、问题或回复... / Enter your symptoms, questions, or responses...",
+            height=100,
+            label_visibility="collapsed"
+        )
+        submit = st.form_submit_button("发送 / Send", type="primary", use_container_width=True)
 
     with col2:
         st.markdown("### 📷")
