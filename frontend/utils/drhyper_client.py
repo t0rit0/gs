@@ -13,7 +13,7 @@ class DrHyperClient:
     def __init__(self, base_url: str = DRHYPER_API_BASE):
         self.base_url = base_url.rstrip('/')
         # Use synchronous requests for Streamlit compatibility
-        self.timeout = 120.0
+        self.timeout = 360.0
 
     def init_conversation(
         self,
