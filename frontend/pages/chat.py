@@ -73,10 +73,6 @@ def display_image_panel():
                         else:
                             st.write(findings)
 
-                    # Additional metadata
-                    if "confidence" in report:
-                        st.metric("置信度 / Confidence", f"{report['confidence']:.1%}")
-
                     if "recommendation" in report:
                         st.info(f"💡 **建议 / Recommendation**: {report['recommendation']}")
                 else:
@@ -187,25 +183,7 @@ def chat_page():
 
                 except Exception as e:
                     st.error(f"初始化失败 / Initialization failed: {str(e)}")
-                    # Fallback to demo mode
-                    st.session_state.conversation_id = "demo-conversation-id"
-                    st.session_state.current_patient_id = patient_info.get('patient_id', 'new-patient')
-                    welcome_msg = f"您好，{patient_info['name']}。我是 Dr.Hyper，您的高血压专科AI助手。"
-                    st.session_state.messages.append({
-                        "role": "ai",
-                        "content": welcome_msg
-                    })
-                    st.rerun()
-
-        # Show demo mode notice
-        st.markdown("---")
-        st.warning("⚠️ **演示模式 / Demo Mode**: 如需使用真实 DrHyper API，请先启动后端服务。")
-        st.markdown("""
-        **启动后端 / Start Backend:**
-        ```bash
-        python -m drhyper.deploy --host 0.0.0.0 --port 8000
-        ```
-        """)
+                    st.error("请检查后端服务是否正常运行，然后刷新页面重试。/ Please check if the backend service is running, then refresh the page to retry.")
 
     else:
         # Active conversation with split-pane layout
@@ -352,7 +330,6 @@ def display_chat_interface():
                         st.session_state.image_analysis_report = {
                             "findings": ["影像已接收 / Image received", "AI 正在生成详细分析 / AI generating detailed analysis"],
                             "full_report": ai_response if ai_response else "影像分析已完成，但详细报告暂不可用。请查看对话历史中的 AI 回复。",
-                            "confidence": 0.90,
                             "recommendation": "请继续对话以获取更多分析信息 / Continue conversation for more analysis",
                             "image_count": 1
                         }
@@ -367,13 +344,7 @@ def display_chat_interface():
 
             except Exception as e:
                 st.error(f"发送失败 / Send failed: {str(e)}")
-                # Demo fallback
-                ai_response = generate_demo_response(user_input if user_input else "image analysis")
-                st.session_state.messages.append({
-                    "role": "ai",
-                    "content": ai_response
-                })
-                st.rerun()
+                st.error("请检查后端服务是否正常运行。/ Please check if the backend service is running normally.")
 
     # Action buttons at the bottom
     st.markdown("---")
@@ -403,21 +374,3 @@ def display_chat_interface():
                 st.rerun()
             except Exception as e:
                 st.error(f"结束失败 / End failed: {str(e)}")
-
-
-def generate_demo_response(user_input: str) -> str:
-    """Generate demo AI response (placeholder for actual DrHyper API)"""
-    demo_responses = {
-        "头痛": "请问您的头痛是持续性的还是间歇性的？疼痛部位在头的一侧还是整个头部？是否伴有恶心、呕吐或视力模糊？",
-        "头晕": "请问您的头晕是旋转感（天旋地转）还是头重脚轻的感觉？是否在改变体位时加重？是否有耳鸣或听力下降？",
-        "咳嗽": "请问您的咳嗽是干咳还是有痰？痰是什么颜色的？是否伴有发热、胸痛或呼吸困难？咳嗽持续多久了？",
-        "发热": "请问您测量的体温是多少？发热持续多久了？是否伴有寒战、出汗或其他症状？",
-        "血压": "请问您最近测量的血压值是多少？是否有定期监测血压的习惯？是否正在服用降压药物？",
-        "default": "感谢您提供的信息。为了更好地了解您的情况，我需要了解更多细节。请问您的症状持续多久了？是否有过类似的症状？是否有既往病史或正在服用的药物？"
-    }
-
-    for keyword, response in demo_responses.items():
-        if keyword in user_input:
-            return response
-
-    return demo_responses["default"]
