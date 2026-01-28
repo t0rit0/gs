@@ -75,3 +75,6 @@ storage/
 
 # Ruff
 .ruff_cache/
+
+# Testing data
+msg*.jpg
