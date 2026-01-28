@@ -94,14 +94,13 @@ def init_database():
 
     This will create all tables defined in models.py
     """
-    from backend.database.models import Patient, Conversation, Message
-
+    # import models to register the with Base.metadata
+    import backend.database.models  # noqa: F401
+    
+    assert len(Base.metadata.tables) > 0, "No models registered"
     Base.metadata.create_all(bind=engine)
 
     print(f"✅ Database initialized at: {engine.url}")
-    print(f"📊 Tables created:")
-    for table_name in Base.metadata.tables.keys():
-        print(f"   - {table_name}")
 
 def drop_database():
     """

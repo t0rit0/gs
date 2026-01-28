@@ -308,6 +308,58 @@ class ImageStorage:
         except Exception:
             return False
 
+    def save_base64_images(
+        self,
+        conversation_id: str,
+        message_id: int,
+        base64_images: List[str]
+    ) -> List[str]:
+        """
+        Save base64-encoded images (for DrHyper integration)
+
+        Args:
+            conversation_id: Conversation UUID
+            message_id: Message ID
+            base64_images: List of base64-encoded image strings
+
+        Returns:
+            List of saved image paths
+        """
+        import base64
+        import re
+
+        saved_paths = []
+
+        for idx, base64_img in enumerate(base64_images):
+            # Extract the base64 data
+            if "," in base64_img:
+                # Data URI format: "data:image/jpeg;base64,..."
+                match = re.match(r'data:image/(\w+);base64,', base64_img)
+                if match:
+                    format = match.group(1).upper()
+                    if format == "JPG":
+                        format = "JPEG"
+                    base64_data = base64_img.split(",", 1)[1]
+                else:
+                    format = "JPEG"
+                    base64_data = base64_img.split(",", 1)[1] if "," in base64_img else base64_img
+            else:
+                # Raw base64 format
+                format = "JPEG"
+                base64_data = base64_img
+
+            # Decode and save
+            image_bytes = base64.b64decode(base64_data)
+            path = self.save_image_bytes(
+                conversation_id,
+                message_id,
+                image_bytes,
+                format
+            )
+            saved_paths.append(path)
+
+        return saved_paths
+
     def convert_to_base64(self, image_path: str) -> str:
         """
         Convert image to base64 string
