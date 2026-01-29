@@ -121,7 +121,7 @@ class MessageResponse(MessageBase):
     id: int
     turn_number: int
     think_content: Optional[str] = None
-    message_metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    message_metadata: Dict[str, Any] = Field(default_factory=dict)
     image_paths: List[str] = Field(default_factory=list)
     timestamp: datetime
 
