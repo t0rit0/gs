@@ -78,3 +78,5 @@ storage/
 
 # Testing data
 msg*.jpg
+/data
+/artifacts

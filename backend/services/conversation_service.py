@@ -9,8 +9,6 @@ This Service layer is responsible for:
 Reference: drhyper/api/server.py ConversationManager
 """
 import os
-import pickle
-from pathlib import Path
 from typing import Tuple, Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
@@ -42,9 +40,6 @@ class ConversationService:
     Conversation Service - Integrates DrHyper conversation engine and database
 
     Reference: drhyper/api/server.py:ConversationManager implementation
-    Key differences:
-    - ConversationManager: Uses memory + pickle files
-    - ConversationService: Uses database + pickle cache
     """
 
     def __init__(self):
@@ -52,11 +47,7 @@ class ConversationService:
         self.working_dir = self.config.system.working_directory
         self.prompts = ConversationPrompts()
 
-        # DrHyper object cache directory
-        self.cache_dir = Path(self.working_dir) / "backend_cache"
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"ConversationService initialized with cache dir: {self.cache_dir}")
+        logger.info("ConversationService initialized (database-backed cache)")
 
     def create_conversation(
         self,
@@ -129,16 +120,9 @@ class ConversationService:
                 working_directory=self.working_dir,
             )
 
-            # Initialize or load graph structures
-            entity_graph_path = os.path.join(self.working_dir, "entity_graph.pkl")
-            relation_graph_path = os.path.join(self.working_dir, "relation_graph.pkl")
-
-            if os.path.exists(entity_graph_path) and os.path.exists(relation_graph_path):
-                logger.info("Loading existing graph structures...")
-                drhyper_conv.load_graph(entity_graph_path, relation_graph_path)
-            else:
-                logger.info("Initializing new graph structures...")
-                drhyper_conv.init_graph(save=True)
+            # Initialize graph structures for this conversation
+            logger.info("Initializing graph structures for new conversation...")
+            drhyper_conv.init_graph(save=False)  # Don't save to global files
 
             # Initialize conversation, get first AI message
             logger.info("Initializing conversation...")
@@ -147,8 +131,9 @@ class ConversationService:
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
 
-        # 4. Extract and save DrHyper state to database
-        drhyper_state = self._extract_drhyper_state(drhyper_conv)
+        # 4. Save complete DrHyper state to database
+        # Using to_cache_dict() which includes graph structures
+        drhyper_state = drhyper_conv.to_cache_dict()
         conversation_crud.update_drhyper_state(db, conversation_id, drhyper_state)
 
         # 5. Save AI message to database
@@ -158,12 +143,6 @@ class ConversationService:
             content=ai_message
         ))
 
-        # 6. Persist DrHyper object to cache file
-        self._save_drhyper_conversation(
-            conversation_id,
-            drhyper_conv,
-            patient
-        )
 
         logger.info(f"Conversation {conversation_id} created successfully")
 
@@ -195,8 +174,8 @@ class ConversationService:
         """
         logger.info(f"Processing message for conversation {conversation_id}")
 
-        # 1. Load DrHyper conversation from cache
-        drhyper_conv, patient = self._load_drhyper_conversation(conversation_id)
+        # 1. Load DrHyper conversation from database
+        drhyper_conv, patient = self._load_drhyper_conversation(db, conversation_id)
 
         # 2. Process images (if any)
         image_data = None
@@ -247,16 +226,9 @@ class ConversationService:
             message_metadata=message_metadata
         ))
 
-        # 6. Update DrHyper state in database
-        drhyper_state = self._extract_drhyper_state(drhyper_conv)
+        # 6. Update complete DrHyper state in database
+        drhyper_state = drhyper_conv.to_cache_dict()
         conversation_crud.update_drhyper_state(db, conversation_id, drhyper_state)
-
-        # 7. Re-cache DrHyper object
-        self._save_drhyper_conversation(
-            conversation_id,
-            drhyper_conv,
-            patient
-        )
 
         logger.info(f"Message processed, accomplish={accomplish}")
 
@@ -284,16 +256,15 @@ class ConversationService:
         """
         logger.info(f"Ending conversation {conversation_id}")
 
-        # 1. Load DrHyper conversation to get final state
-        drhyper_conv, _ = self._load_drhyper_conversation(conversation_id)
-        drhyper_state = self._extract_drhyper_state(drhyper_conv)
+        # 1. Load conversation to get final state
+        drhyper_conv, _ = self._load_drhyper_conversation(db, conversation_id)
+        drhyper_state = drhyper_conv.to_cache_dict()
 
         # 2. Update database status to completed
         conversation_crud.close(db, conversation_id)
         conversation_crud.update_drhyper_state(db, conversation_id, drhyper_state)
 
-        # 3. Clean up cache files
-        self._cleanup_drhyper_conversation(conversation_id)
+        # Note: State stays in database for historical records
 
         logger.info(f"Conversation {conversation_id} ended")
 
@@ -331,104 +302,57 @@ class ConversationService:
     # Private helper methods
     # ========================================
 
-    def _extract_drhyper_state(self, drhyper_conv: LongConversation) -> Dict:
-        """
-        Extract state from DrHyper object
-
-        Needs to be implemented based on actual DrHyper API
-        """
-        # TODO: Extract state based on actual DrHyper API
-        state = {
-            "entity_graph": {
-                "nodes": [],
-                "edges": []
-            },
-            "relation_graph": {
-                "nodes": [],
-                "edges": []
-            },
-            "current_hint": getattr(drhyper_conv, 'current_hint', None),
-            "step": getattr(drhyper_conv, 'step', 0),
-            "accomplish": getattr(drhyper_conv, 'accomplish', False)
-        }
-
-        # Try to extract graph structures
-        try:
-            if hasattr(drhyper_conv, 'entity_graph'):
-                entity_graph = drhyper_conv.entity_graph
-                # Convert graph to serializable format
-                # This needs to be implemented based on actual graph data structure
-                state["entity_graph"] = self._serialize_graph(entity_graph)
-
-            if hasattr(drhyper_conv, 'relation_graph'):
-                relation_graph = drhyper_conv.relation_graph
-                state["relation_graph"] = self._serialize_graph(relation_graph)
-        except Exception as e:
-            logger.warning(f"Failed to extract graph structure: {e}")
-
-        return state
-
-    def _serialize_graph(self, graph) -> Dict:
-        """
-        Serialize graph structure
-
-        Needs to be implemented based on actual graph library (e.g., NetworkX)
-        """
-        # TODO: Implement graph serialization
-        # This is a placeholder implementation
-        return {
-            "nodes": [],
-            "edges": []
-        }
-
-    def _save_drhyper_conversation(
+    def _load_drhyper_conversation(
         self,
-        conversation_id: str,
-        drhyper_conv: LongConversation,
-        patient
+        db: Session,
+        conversation_id: str
     ):
-        """Persist DrHyper object to cache file"""
-        filepath = self.cache_dir / f"{conversation_id}.pkl"
+        """
+        Load DrHyper conversation from database.
 
-        try:
-            with open(filepath, "wb") as f:
-                pickle.dump({
-                    "drhyper_conv": drhyper_conv,
-                    "patient": patient
-                }, f)
+        Returns:
+            Tuple of (drhyper_conv, patient)
 
-            logger.debug(f"DrHyper conversation saved to {filepath}")
+        Raises:
+            ValueError: If conversation doesn't exist or state is invalid
+        """
+        # 1. Get conversation record from database
+        db_conv = conversation_crud.get(db, conversation_id)
+        if not db_conv:
+            raise ValueError(f"Conversation not found: {conversation_id}")
 
-        except Exception as e:
-            logger.error(f"Failed to save DrHyper conversation: {e}")
-            raise
+        # 2. Get patient
+        patient = patient_crud.get(db, db_conv.patient_id)
+        if not patient:
+            raise ValueError(f"Patient not found: {db_conv.patient_id}")
 
-    def _load_drhyper_conversation(self, conversation_id: str):
-        """Load DrHyper object from cache file"""
-        filepath = self.cache_dir / f"{conversation_id}.pkl"
+        # 3. Get DrHyper state from database
+        drhyper_state = db_conv.drhyper_state
+        if not drhyper_state:
+            raise ValueError(f"Conversation state is empty: {conversation_id}")
 
-        if not filepath.exists():
-            raise ValueError(f"Conversation cache not found: {conversation_id}")
+        metadata = drhyper_state.get("metadata", {})
+        version = metadata.get("version", "unknown")
 
-        try:
-            with open(filepath, "rb") as f:
-                data = pickle.load(f)
+        logger.info(f"Loading conversation from database v{version}: {conversation_id}")
+        logger.info(f"State cached at: {metadata.get('cached_at', 'unknown')}")
+        logger.info(f"Message count: {metadata.get('message_count', 0)}")
+        logger.info(f"Entity graph nodes: {metadata.get('entity_graph_nodes', 0)}")
 
-            logger.debug(f"DrHyper conversation loaded from {filepath}")
+        # 4. Load models (needed for conversation restoration)
+        logger.info("Loading models for conversation restoration...")
+        conv_model, graph_model = load_models(verbose=False)
 
-            return data["drhyper_conv"], data["patient"]
+        # 5. Restore conversation from cached state
+        drhyper_conv = LongConversation.from_cache_dict(
+            cache_dict=drhyper_state,
+            conv_model=conv_model,
+            graph_model=graph_model
+        )
 
-        except Exception as e:
-            logger.error(f"Failed to load DrHyper conversation: {e}")
-            raise
+        logger.info(f"Conversation restored successfully from database")
 
-    def _cleanup_drhyper_conversation(self, conversation_id: str):
-        """Clean up DrHyper cache files"""
-        filepath = self.cache_dir / f"{conversation_id}.pkl"
-
-        if filepath.exists():
-            filepath.unlink()
-            logger.debug(f"Cleaned up cache for {conversation_id}")
+        return drhyper_conv, patient
 
 
 # Export singleton
