@@ -19,42 +19,108 @@ def setup_page_config():
         page_title=PAGE_TITLE,
         layout=PAGE_LAYOUT,
         page_icon=PAGE_ICON,
-        initial_sidebar_state="expanded"
+        initial_sidebar_state="collapsed"  # Changed to collapsed for better UX
     )
 
 
-def sidebar_navigation():
-    """Create sidebar navigation menu"""
+def top_navigation():
+    """Create top navigation bar for page switching"""
+    # Use st.columns to create a top navigation bar
+    col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 2, 1])
+
+    with col1:
+        st.markdown(f"### {PAGE_ICON}")
+
+    with col2:
+        if st.button(
+            "💬 对话问诊 / Consultation",
+            use_container_width=True,
+            type="primary" if st.session_state.get('current_page') == 'chat' else "secondary"
+        ):
+            st.session_state.current_page = 'chat'
+            st.rerun()
+
+    with col3:
+        if st.button(
+            "👥 患者管理 / Patients",
+            use_container_width=True,
+            type="primary" if st.session_state.get('current_page') == 'patients' else "secondary"
+        ):
+            st.session_state.current_page = 'patients'
+            st.rerun()
+
+    with col4:
+        if st.button(
+            "⚙️ 系统设置 / Settings",
+            use_container_width=True,
+            type="primary" if st.session_state.get('current_page') == 'settings' else "secondary"
+        ):
+            st.session_state.current_page = 'settings'
+            st.rerun()
+
+    with col5:
+        # Backend status indicator
+        try:
+            from frontend.utils.backend_client import BackendClient
+            client = BackendClient()
+            health = client.health_check()
+            st.markdown(f'<div style="text-align: center; color: green;">●</div>', unsafe_allow_html=True)
+            st.caption("在线 / Online")
+        except:
+            st.markdown(f'<div style="text-align: center; color: red;">●</div>', unsafe_allow_html=True)
+            st.caption("离线 / Offline")
+
+    st.markdown("---")
+
+
+def sidebar():
+    """Create sidebar with additional information"""
     with st.sidebar:
         st.title(f"{PAGE_ICON} {PAGE_TITLE}")
         st.markdown("---")
 
-        page = option_menu(
-            menu_title="导航 / Navigation",
-            options=[
-                "对话问诊 / Consultation",
-                "患者管理 / Patient Management",
-                "系统设置 / Settings"
-            ],
-            icons=["chat-dots", "person-badge", "gear"],
-            menu_icon="cast",
-            default_index=0,
-            styles={
-                "container": {"padding": "5!important"},
-                "icon": {"color": "orange", "font-size": "18px"},
-                "nav-link": {
-                    "font-size": "14px",
-                    "text-align": "left",
-                    "margin": "0px",
-                }
-            }
-        )
+        # System status
+        st.markdown("### 系统状态 / System Status")
+
+        try:
+            from frontend.utils.backend_client import BackendClient
+            client = BackendClient()
+            health = client.health_check()
+            st.success(f"✅ 后端服务正常 / Backend OK")
+            st.caption(f"版本 / Version: {health.get('version', 'N/A')}")
+        except Exception as e:
+            st.error(f"❌ 后端连接失败 / Backend Error")
+            st.caption(f"{str(e)[:50]}...")
 
         st.markdown("---")
-        st.caption("基于 DrHyper 诊断引擎")
-        st.caption("Powered by DrHyper Diagnostic Engine")
 
-    return page
+        # Current session info
+        if st.session_state.get('current_conversation_id'):
+            st.markdown("### 当前会话 / Current Session")
+
+            if st.session_state.get('current_patient_info'):
+                patient = st.session_state.current_patient_info
+                st.info(f"**{patient.get('name', 'N/A')}**\n{patient.get('age', 'N/A')}岁, {patient.get('gender', 'N/A')}")
+
+            st.caption(f"会话 ID / Session ID:\n`{st.session_state.current_conversation_id[:8]}...`")
+            st.caption(f"消息数 / Messages: {len(st.session_state.get('messages', []))}")
+
+        st.markdown("---")
+
+        # Quick actions
+        st.markdown("### 快捷操作 / Quick Actions")
+
+        if st.button("🔄 重置会话 / Reset Session", use_container_width=True):
+            from frontend.utils.helpers import reset_current_conversation
+            reset_current_conversation()
+            st.rerun()
+
+        if st.button("🏠 返回首页 / Home", use_container_width=True):
+            st.session_state.current_page = 'chat'
+            st.rerun()
+
+        st.markdown("---")
+        st.caption("基于 DrHyper 诊断引擎\nPowered by DrHyper Diagnostic Engine")
 
 
 def main():
@@ -74,20 +140,35 @@ def main():
             border-bottom: 2px solid #f0f0f0;
             margin-bottom: 2rem;
         }
+        /* Hide default sidebar */
+        [data-testid="stSidebar"] {
+            display: none;
+        }
+        /* Show our custom sidebar */
+        [data-testid="stSidebar"][aria-expanded="true"] {
+            display: block;
+        }
         </style>
     """, unsafe_allow_html=True)
 
-    # Sidebar navigation
-    page = sidebar_navigation()
+    # Top navigation bar
+    top_navigation()
+
+    # Sidebar (can be toggled)
+    # We use a custom approach for sidebar since we want it visible
+    # Streamlit's sidebar is always there, we just use it
+    # The custom CSS hides it by default but it can be shown
 
     # Route to appropriate page
-    if page == "对话问诊 / Consultation":
+    page = st.session_state.get('current_page', 'chat')
+
+    if page == "chat":
         from frontend.pages.chat import chat_page
         chat_page()
-    elif page == "患者管理 / Patient Management":
+    elif page == "patients":
         from frontend.pages.patients import patients_page
         patients_page()
-    elif page == "系统设置 / Settings":
+    elif page == "settings":
         from frontend.pages.settings import settings_page
         settings_page()
 
