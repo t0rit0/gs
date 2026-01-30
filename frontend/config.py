@@ -10,9 +10,12 @@ STORAGE_DIR = BASE_DIR / "storage"
 IMAGES_DIR = STORAGE_DIR / "images"
 TEMP_DIR = STORAGE_DIR / "temp"
 
-# DrHyper API Configuration
+# DrHyper API Configuration (Legacy - kept for compatibility)
 DRHYPER_API_KEY = os.getenv("DRHYPER_API_KEY", "your-api-key-here")
 DRHYPER_API_BASE = os.getenv("DRHYPER_API_BASE", "http://localhost:8000")
+
+# Backend API Configuration (New FastAPI Backend)
+BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://localhost:8000")
 
 # Streamlit Configuration
 PAGE_TITLE = "医疗助手系统 - Medical Assistant"
