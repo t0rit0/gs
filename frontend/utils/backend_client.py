@@ -12,7 +12,7 @@ class BackendClient:
 
     def __init__(self, base_url: str = BACKEND_API_BASE):
         self.base_url = base_url.rstrip('/')
-        self.timeout = 360.0
+        self.timeout = 3600.0
 
     def _request(self, method: str, endpoint: str, **kwargs) -> dict[str, Any]:
         """Internal request handler with error handling"""
@@ -163,3 +163,7 @@ class BackendClient:
     def end_conversation(self, conversation_id: str) -> dict[str, Any]:
         """End a conversation"""
         return self._request("POST", f"/api/conversations/{conversation_id}/end")
+
+    def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """Delete a conversation (cascades to messages and images)"""
+        return self._request("DELETE", f"/api/conversations/{conversation_id}")

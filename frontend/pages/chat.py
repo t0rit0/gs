@@ -142,7 +142,7 @@ def sidebar():
                             st.caption(f"会话ID / ID: `{conv_id[:12]}...`")
                             st.caption(f"状态 / Status: {status}")
 
-                            col1, col2 = st.columns(2)
+                            col1, col2, col3 = st.columns([3, 2, 2])
 
                             with col1:
                                 if st.button(
@@ -179,6 +179,35 @@ def sidebar():
                                 ):
                                     # Show conversation details (could be expanded in future)
                                     st.json(conv)
+
+                            with col3:
+                                # Show confirmation warning if pending
+                                if st.session_state.get(f'confirm_delete_{conv_id}', False):
+                                    st.warning("⚠️ 确认删除？/ Confirm?")
+
+                                if st.button(
+                                    "🗑️ 删除 / Delete",
+                                    key=f"delete_{conv_id}",
+                                    type="secondary",
+                                    use_container_width=True
+                                ):
+                                    # Don't allow deleting current conversation
+                                    if conv_id == st.session_state.current_conversation_id:
+                                        st.error("无法删除当前对话 / Cannot delete current conversation")
+                                    else:
+                                        try:
+                                            # Confirm deletion
+                                            if st.session_state.get(f'confirm_delete_{conv_id}', False):
+                                                client.delete_conversation(conv_id)
+                                                st.success(f"✅ 对话已删除 / Conversation deleted")
+                                                st.session_state.pop(f'confirm_delete_{conv_id}', None)
+                                                st.rerun()
+                                            else:
+                                                st.session_state[f'confirm_delete_{conv_id}'] = True
+                                                st.rerun()
+                                        except Exception as e:
+                                            st.error(f"删除失败 / Delete failed: {str(e)}")
+                                            st.session_state.pop(f'confirm_delete_{conv_id}', None)
 
                     st.markdown("---")
 

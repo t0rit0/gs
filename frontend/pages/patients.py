@@ -137,7 +137,7 @@ def patient_management_page():
 
                     with col4:
                         # Action buttons
-                        btn_col1, btn_col2, btn_col3 = st.columns(3)
+                        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
 
                         with btn_col1:
                             if st.button(
@@ -169,6 +169,36 @@ def patient_management_page():
                             ):
                                 st.session_state.editing_patient = patient
                                 st.rerun()
+
+                        with btn_col4:
+                            if st.button(
+                                "🗑️",
+                                key=f"delete_{patient['patient_id']}",
+                                help="删除 / Delete",
+                                use_container_width=True
+                            ):
+                                # Confirm deletion
+                                if st.session_state.get(f'confirm_delete_patient_{patient["patient_id"]}', False):
+                                    try:
+                                        client.delete_patient(patient['patient_id'])
+                                        st.success(f"✅ 患者已删除 / Patient deleted: {patient.get('name')}")
+                                        st.session_state.pop(f'confirm_delete_patient_{patient["patient_id"]}', None)
+                                        # Clear viewing/editing states if this patient
+                                        if st.session_state.get('viewing_patient', {}).get('patient_id') == patient['patient_id']:
+                                            st.session_state.viewing_patient = None
+                                        if st.session_state.get('editing_patient', {}).get('patient_id') == patient['patient_id']:
+                                            st.session_state.editing_patient = None
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"删除失败 / Delete failed: {str(e)}")
+                                        st.session_state.pop(f'confirm_delete_patient_{patient["patient_id"]}', None)
+                                else:
+                                    st.session_state[f'confirm_delete_patient_{patient["patient_id"]}'] = True
+                                    st.rerun()
+
+                    # Show deletion confirmation warning if pending
+                    if st.session_state.get(f'confirm_delete_patient_{patient["patient_id"]}', False):
+                        st.warning(f"⚠️ 确认删除患者 {patient.get('name')}？再次点击删除按钮确认。/ Confirm delete patient {patient.get('name')}? Click delete button again to confirm.")
 
                     # Show recent conversations below each patient
                     try:
@@ -316,7 +346,7 @@ def patient_management_page():
             st.warning(f"无法加载对话历史 / Failed to load conversations: {str(e)}")
 
         # Action buttons
-        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
 
         with btn_col1:
             if st.button("💬 开始对话 / Start Chat", type="primary", use_container_width=True):
@@ -332,9 +362,39 @@ def patient_management_page():
                 st.rerun()
 
         with btn_col3:
+            # Delete button with confirmation
+            delete_key = f'detail_delete_{patient["patient_id"]}'
+            if st.button(
+                "🗑️ 删除 / Delete",
+                key=delete_key,
+                use_container_width=True
+            ):
+                if st.session_state.get(f'confirm_delete_patient_{patient["patient_id"]}', False):
+                    try:
+                        client.delete_patient(patient['patient_id'])
+                        st.success(f"✅ 患者已删除 / Patient deleted: {patient.get('name')}")
+                        st.session_state.pop(f'confirm_delete_patient_{patient["patient_id"]}', None)
+                        st.session_state.viewing_patient = None
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"删除失败 / Delete failed: {str(e)}")
+                        st.session_state.pop(f'confirm_delete_patient_{patient["patient_id"]}', None)
+                else:
+                    st.session_state[f'confirm_delete_patient_{patient["patient_id"]}'] = True
+                    st.rerun()
+
+        with btn_col4:
             if st.button("✕ 关闭 / Close", use_container_width=True):
                 st.session_state.viewing_patient = None
+                # Cancel deletion confirmation if pending
+                if f'confirm_delete_patient_{patient["patient_id"]}' in st.session_state:
+                    st.session_state.pop(f'confirm_delete_patient_{patient["patient_id"]}', None)
                 st.rerun()
+
+        # Show deletion confirmation warning
+        if st.session_state.get(f'confirm_delete_patient_{patient["patient_id"]}', False):
+            st.error(f"⚠️ 确认删除患者？所有对话记录将被永久删除！/ Confirm delete patient? All conversation history will be permanently deleted!")
+            st.caption("请再次点击删除按钮确认 / Click delete button again to confirm")
 
     # Patient edit modal
     if st.session_state.get('editing_patient'):

@@ -335,7 +335,12 @@ async def get_conversation_messages(
     db: Session = Depends(get_db)
 ):
     """Get all messages in a conversation"""
-    from backend.database.crud import message_crud
+    from backend.database.crud import message_crud, conversation_crud
+
+    # Check if conversation exists first
+    conv = conversation_crud.get(db, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     messages = message_crud.list_by_conversation(db, conversation_id)
     return messages
@@ -364,6 +369,32 @@ async def get_patient_conversations(
     )
 
     return conversations
+
+
+@app.delete(
+    "/api/conversations/{conversation_id}",
+    tags=["Conversations"]
+)
+async def delete_conversation(
+    conversation_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete conversation (cascades to messages and images)
+
+    Warning: This operation is irreversible!
+    """
+    try:
+        success = conversation_service.delete_conversation(db, conversation_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": "Conversation deleted successfully"}
+    except ValueError as e:
+        logger.error(f"Value error in delete_conversation: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to delete conversation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================

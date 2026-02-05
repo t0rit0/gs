@@ -298,6 +298,50 @@ class ConversationService:
             for msg in messages
         ]
 
+    def delete_conversation(
+        self,
+        db: Session,
+        conversation_id: str
+    ) -> bool:
+        """
+        Delete a conversation (cascade deletes messages and images)
+
+        Args:
+            db: Database session
+            conversation_id: Conversation ID
+
+        Returns:
+            True if deleted, False otherwise
+
+        Raises:
+            ValueError: If conversation doesn't exist
+        """
+        logger.info(f"Deleting conversation {conversation_id}")
+
+        # 1. Verify conversation exists
+        conv = conversation_crud.get(db, conversation_id)
+        if not conv:
+            raise ValueError(f"Conversation not found: {conversation_id}")
+
+        # 2. Delete associated images from file system
+        try:
+            deleted_count = image_storage.delete_conversation_images(conversation_id)
+            if deleted_count > 0:
+                logger.info(f"Deleted {deleted_count} images for conversation {conversation_id}")
+        except Exception as e:
+            logger.warning(f"Failed to delete images for conversation {conversation_id}: {e}")
+            # Continue with deletion even if image deletion fails
+
+        # 3. Delete conversation (cascade will delete messages)
+        success = conversation_crud.delete(db, conversation_id)
+
+        if success:
+            logger.info(f"Conversation {conversation_id} deleted successfully")
+        else:
+            logger.error(f"Failed to delete conversation {conversation_id}")
+
+        return success
+
     # ========================================
     # Private helper methods
     # ========================================

@@ -309,6 +309,88 @@ class TestConversationsAPI:
         data = response.json()
         assert isinstance(data, list)
 
+    def test_delete_conversation(self, api_base_url, conversation_data):
+        """测试删除对话"""
+        import requests
+
+        # 先创建对话
+        create_data = {
+            "patient_id": self.patient_id,
+            **conversation_data
+        }
+        create_response = requests.post(
+            f"{api_base_url}/api/conversations",
+            json=create_data
+        )
+        conversation_id = create_response.json()["conversation_id"]
+
+        # 删除对话
+        response = requests.delete(
+            f"{api_base_url}/api/conversations/{conversation_id}"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "message" in data
+
+        # 验证已删除
+        get_response = requests.get(
+            f"{api_base_url}/api/conversations/{conversation_id}"
+        )
+        assert get_response.status_code == 404
+
+    def test_delete_conversation_invalid_id(self, api_base_url):
+        """测试删除不存在的对话"""
+        import requests
+
+        response = requests.delete(
+            f"{api_base_url}/api/conversations/invalid-conversation-id"
+        )
+
+        assert response.status_code == 404
+
+    def test_delete_conversation_cascade_messages(self, api_base_url, conversation_data):
+        """测试删除对话时级联删除消息"""
+        import requests
+
+        # 先创建对话
+        create_data = {
+            "patient_id": self.patient_id,
+            **conversation_data
+        }
+        create_response = requests.post(
+            f"{api_base_url}/api/conversations",
+            json=create_data
+        )
+        conversation_id = create_response.json()["conversation_id"]
+
+        # 验证初始消息存在（创建对话时会自动生成一条欢迎消息）
+        messages_before = requests.get(
+            f"{api_base_url}/api/conversations/{conversation_id}/messages"
+        )
+        assert messages_before.status_code == 200
+        initial_message_count = len(messages_before.json())
+        assert initial_message_count >= 1  # 至少有一条初始化消息
+
+        # 删除对话
+        delete_response = requests.delete(
+            f"{api_base_url}/api/conversations/{conversation_id}"
+        )
+        assert delete_response.status_code == 200
+
+        # 验证对话已被删除
+        conv_response = requests.get(
+            f"{api_base_url}/api/conversations/{conversation_id}"
+        )
+        assert conv_response.status_code == 404
+
+        # 验证消息也无法访问（对话不存在时返回404）
+        messages_response = requests.get(
+            f"{api_base_url}/api/conversations/{conversation_id}/messages"
+        )
+        # 对话不存在，消息API也应该返回404
+        assert messages_response.status_code == 404
+
 
 class TestAPIIntegration:
     """API 集成测试 - 完整流程"""
