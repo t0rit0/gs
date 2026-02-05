@@ -1,0 +1,37 @@
+# Configuration file for the medical assistant system
+# Copy this file to config.yaml and update with your settings
+
+# LLM Configuration
+llm:
+  # Provider: openai, anthropic, etc.
+  provider: openai
+
+  # Model name to use
+  model: gpt-4o
+
+  # API key for the LLM provider
+  # Alternatively, set OPENAI_API_KEY environment variable
+  api_key: your-api-key-here
+
+  # Base URL for the API
+  # For OpenAI: https://api.openai.com/v1
+  # For Azure OpenAI: your Azure endpoint
+  # Alternatively, set OPENAI_BASE_URL environment variable
+  base_url: https://api.openai.com/v1
+
+  # Generation parameters
+  temperature: 0.7
+  max_tokens: 2000
+  timeout: 60
+
+# Database Configuration (optional)
+# database:
+#   url: sqlite:///./data/demo.db
+#   pool_size: 5
+#   max_overflow: 10
+
+# Logging Configuration (optional)
+# logging:
+#   level: INFO
+#   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+#   file: logs/app.log
