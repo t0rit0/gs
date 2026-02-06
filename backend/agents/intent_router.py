@@ -152,7 +152,7 @@ class IntentRouter:
                             "properties": {
                                 "type": {
                                     "type": "string",
-                                    "enum": ["diagnostic_chat", "data_query", "data_update", "system_cmd", "unknown"]
+                                    "enum": ["diagnostic_chat", "data_query", "data_update", "unknown"]
                                 },
                                 "analysis": {
                                     "type": "string",
@@ -164,8 +164,8 @@ class IntentRouter:
                         }
                     }
                 },
-                temperature=0.1,  # Low temperature for consistent classification
-                max_tokens=200
+                temperature=0,  # Low temperature for consistent classification
+                max_tokens=1024
             )
 
             # Parse structured output

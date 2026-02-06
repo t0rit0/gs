@@ -36,6 +36,7 @@ from backend.database.schemas import (
 from backend.services.sandbox_session import SandboxSession
 from backend.config.config_manager import get_config
 from backend.prompts import load_prompt
+from backend.agents.orm_helpers import get_custom_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -195,15 +196,13 @@ class DataManagerCodeAgent:
             api_base=self.config.get_base_url()
         )
 
-        # Create system prompt
-        system_prompt = self._build_system_prompt()
-
-        # Initialize CodeAgent with tools and model
+        # Get custom instructions (ORM documentation)
+        custom_instructions = get_custom_instructions()
         self.agent = CodeAgent(
             tools=[query_database],
             model=self.model,
             max_steps=5,
-            system_prompt=system_prompt
+            instructions=custom_instructions
         )
 
         logger.info(
@@ -211,22 +210,6 @@ class DataManagerCodeAgent:
             f"model={self.config.get_model()}, "
             f"base_url={self.config.get_base_url()}"
         )
-
-    def _build_system_prompt(self) -> str:
-        """
-        Build system prompt with ORM context and security rules
-
-        Returns:
-            System prompt string
-        """
-        try:
-            return load_prompt("data_manager_system")
-        except FileNotFoundError as e:
-            logger.error(f"Failed to load system prompt: {e}")
-            raise RuntimeError(
-                "System prompt file 'data_manager_system.txt' not found. "
-                "Please ensure the prompts directory is properly set up."
-            )
 
     def process_request(
         self,

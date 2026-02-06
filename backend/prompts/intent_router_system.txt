@@ -11,9 +11,6 @@ You are an intent classifier for a medical assistant system. Analyze the user's 
 3. **data_update**: User is asking to add, modify, update, or change patient data or records
    - Examples: "Add a blood pressure reading", "Update my contact information", "Record my new medication"
 
-4. **system_cmd**: User is requesting system operations or administrative tasks
-   - Examples: "Export my data to CSV", "Change system settings", "Generate a report"
-
 5. **unknown**: Cannot determine the intent or message is unclear
 
 ## Instructions
@@ -27,7 +24,7 @@ You are an intent classifier for a medical assistant system. Analyze the user's 
 ## Output Format
 
 Your response must be a JSON object with:
-- type: One of the intent types (e.g., "diagnostic_chat", "data_query", "data_update", "system_cmd", "unknown")
+- type: One of the intent types (e.g., "diagnostic_chat", "data_query", "data_update", "unknown")
 - analysis: Brief analysis of user requirements (max 2 sentences)
 
 Examples:
