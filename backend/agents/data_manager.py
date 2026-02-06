@@ -23,7 +23,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
-from smolagents import CodeAgent, OpenAIModel, tool
+from smolagents import ToolCallingAgent, OpenAIModel, tool
 
 from backend.database.base import SessionLocal
 from backend.database.models import Patient, Conversation, Message
@@ -98,71 +98,120 @@ def is_request_blocked(user_request: str) -> Optional[str]:
 # ============================================
 
 @tool
-def query_database(code: str) -> str:
+def query_database(code: str, conversation_id: str = "auto") -> str:
     """
-    Execute database query code in sandbox mode
+    Execute database query code in SANDBOX MODE (ENFORCED)
 
-    This tool executes Python code for database operations in a sandboxed environment.
+    CRITICAL SECURITY: ALL write operations AUTOMATICALLY go through sandbox.
+    User approval is REQUIRED before any changes are committed to database.
+
     The code will have access to:
-    - SessionLocal: Database session factory
-    - patient_crud: Patient CRUD operations
-    - SandboxSession: Sandbox wrapper for sessions
+    - sandbox: Auto-created SandboxSession for all operations
     - Patient, Conversation, Message: ORM models
+    - patient_crud: Patient CRUD operations (uses sandbox automatically)
 
-    IMPORTANT:
-    - Code MUST use SandboxSession for any write operations
-    - Conversations and messages tables are BLOCKED for security
-    - Queries should return readable results
+    SECURITY RESTRICTIONS:
+    - Direct SessionLocal() usage is BLOCKED
+    - Conversations and messages tables are BLOCKED
+    - All write operations require user approval
 
     Args:
         code: Python code to execute
+        conversation_id: ID for tracking sandbox operations (default: "auto")
 
     Returns:
-        String representation of execution result
+        Execution result with pending operations info (if any writes attempted)
     """
-    # Security check
+    import uuid
+    from backend.services.sandbox_session import sandbox_session as create_sandbox
+
+    # Security check for blocked tables
     block_error = is_request_blocked(code)
     if block_error:
         return f"ERROR: {block_error}"
 
-    # Create execution environment
-    exec_globals = {
-        "SessionLocal": SessionLocal,
-        "SandboxSession": SandboxSession,
-        # Models
-        "Patient": Patient,
-        "Conversation": Conversation,
-        "Message": Message,
-        # CRUD operations
-        "patient_crud": patient_crud,
-        "conversation_crud": conversation_crud,
-        "message_crud": message_crud,
-        # Schemas
-        "PatientCreate": PatientCreate,
-        "PatientUpdate": PatientUpdate,
-        "ConversationCreate": ConversationCreate,
-        "ConversationUpdate": ConversationUpdate,
-        "MessageCreate": MessageCreate,
-    }
+    # Generate conversation_id if not provided
+    if conversation_id == "auto":
+        conversation_id = f"conv_{uuid.uuid4().hex[:8]}"
+
+    # CRITICAL: Check if code tries to use SessionLocal directly
+    forbidden_patterns = [
+        "SessionLocal()",
+        "SessionLocal (",
+    ]
+    for pattern in forbidden_patterns:
+        if pattern in code:
+            return (
+                f"ERROR: Security violation - Direct session usage is not allowed. "
+                f"Use the 'sandbox' object (auto-created SandboxSession) for all database operations. "
+                f"All write operations will be recorded and require user approval."
+            )
+
+    # Create a sandbox session for this execution
+    # NOTE: We create it but don't expose SessionLocal directly
+    _real_session = SessionLocal()
+
+    # Create sandbox wrapper
+    sandbox = SandboxSession(_real_session, conversation_id)
 
     try:
-        # Execute code
-        exec_result = {}
-        exec_globals["result"] = exec_result
+        # Create execution environment with sandbox (NOT SessionLocal)
+        exec_globals = {
+            # EXPOSE: Sandbox session (this is the ONLY way to access DB)
+            "sandbox": sandbox,
+            "SandboxSession": SandboxSession,  # For reference, but sandbox is pre-created
+            # Models (read-only access)
+            "Patient": Patient,
+            "Conversation": Conversation,
+            "Message": Message,
+            # NOTE: SessionLocal is NOT exposed - prevents direct access
+            # CRUD operations (they will use the sandbox)
+            "patient_crud": patient_crud,
+            # Schemas
+            "PatientCreate": PatientCreate,
+            "PatientUpdate": PatientUpdate,
+            # Result container
+            "result": {},
+        }
 
+        # Execute code with sandbox environment
+        exec_result = exec_globals["result"]
         exec(code, exec_globals)
 
-        # Return result
+        # Check if there are pending operations
+        pending_ops = sandbox.get_pending_operations()
+
+        # Build response
         if "output" in exec_result:
-            return str(exec_result["output"])
+            output = str(exec_result["output"])
         elif "data" in exec_result:
-            return str(exec_result["data"])
+            output = str(exec_result["data"])
         else:
-            return "Code executed successfully (no explicit output)"
+            output = "Code executed successfully"
+
+        # If there are pending operations, include that info
+        if pending_ops:
+            output += f"\n\n[INFO] {len(pending_ops)} pending operation(s) recorded. Awaiting user approval."
+
+        # Rollback to prevent unapproved commits
+        # (operations are preserved in sandbox.operations)
+        if not sandbox._committed:
+            sandbox.rollback()
+
+        return output
 
     except Exception as e:
         logger.error(f"Error executing database code: {e}", exc_info=True)
+        # Rollback on error
+        if not sandbox._committed:
+            sandbox.rollback()
         return f"ERROR: {str(e)}"
+
+    finally:
+        # Always close the underlying session
+        # (operations are preserved for review/approval)
+        if not sandbox._committed:
+            sandbox.close()
 
 
 # ============================================
@@ -198,10 +247,13 @@ class DataManagerCodeAgent:
 
         # Get custom instructions (ORM documentation)
         custom_instructions = get_custom_instructions()
-        self.agent = CodeAgent(
+
+        from smolagents import LogLevel
+
+        self.agent = ToolCallingAgent(
             tools=[query_database],
             model=self.model,
-            max_steps=5,
+            verbosity_level=LogLevel.DEBUG,
             instructions=custom_instructions
         )
 
@@ -312,4 +364,4 @@ class DataManagerCodeAgent:
             }
 
     def __repr__(self):
-        return "DataManagerCodeAgent(model=CodeAgent, tools=[query_database])"
+        return "DataManagerCodeAgent(model=ToolCallingAgent, tools=[query_database])"
