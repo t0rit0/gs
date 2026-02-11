@@ -105,8 +105,13 @@ def query_database(code: str, conversation_id: str = "auto") -> str:
     CRITICAL SECURITY: ALL write operations AUTOMATICALLY go through sandbox.
     User approval is REQUIRED before any changes are committed to database.
 
+    IMPORTANT - Session-level sandbox:
+    - Operations from the same conversation_id ACCUMULATE across multiple requests
+    - All operations can be approved together at conversation end
+    - Use SandboxSessionManager.approve_and_execute_all() to commit
+
     The code will have access to:
-    - sandbox: Auto-created SandboxSession for all operations
+    - sandbox: SandboxSession for all operations (managed by SandboxSessionManager)
     - Patient, Conversation, Message: ORM models
     - patient_crud: Patient CRUD operations (uses sandbox automatically)
 
@@ -118,12 +123,13 @@ def query_database(code: str, conversation_id: str = "auto") -> str:
     Args:
         code: Python code to execute
         conversation_id: ID for tracking sandbox operations (default: "auto")
+                        IMPORTANT: Use consistent conversation_id to accumulate operations
 
     Returns:
         Execution result with pending operations info (if any writes attempted)
     """
     import uuid
-    from backend.services.sandbox_session import sandbox_session as create_sandbox
+    from backend.services.session_sandbox_manager import sandbox_session_manager
 
     # Security check for blocked tables
     block_error = is_request_blocked(code)
@@ -143,16 +149,14 @@ def query_database(code: str, conversation_id: str = "auto") -> str:
         if pattern in code:
             return (
                 f"ERROR: Security violation - Direct session usage is not allowed. "
-                f"Use the 'sandbox' object (auto-created SandboxSession) for all database operations. "
+                f"Use the 'sandbox' object (managed by SandboxSessionManager) for all database operations. "
                 f"All write operations will be recorded and require user approval."
             )
 
-    # Create a sandbox session for this execution
-    # NOTE: We create it but don't expose SessionLocal directly
+    # Create or get existing sandbox from manager
+    # This enables operation accumulation across multiple requests
     _real_session = SessionLocal()
-
-    # Create sandbox wrapper
-    sandbox = SandboxSession(_real_session, conversation_id)
+    sandbox = sandbox_session_manager.get_or_create_sandbox(_real_session, conversation_id)
 
     try:
         # Create execution environment with sandbox (NOT SessionLocal)
@@ -191,27 +195,22 @@ def query_database(code: str, conversation_id: str = "auto") -> str:
 
         # If there are pending operations, include that info
         if pending_ops:
-            output += f"\n\n[INFO] {len(pending_ops)} pending operation(s) recorded. Awaiting user approval."
+            total_ops = len(pending_ops)
+            output += f"\n\n[INFO] {total_ops} pending operation(s) recorded for conversation '{conversation_id}'."
+            output += f" Use approve_and_execute_all('{conversation_id}') to commit when ready."
 
-        # Rollback to prevent unapproved commits
-        # (operations are preserved in sandbox.operations)
-        if not sandbox._committed:
-            sandbox.rollback()
+        # NOTE: We DON'T rollback or close here
+        # The SandboxSessionManager manages the lifecycle
+        # Operations accumulate across requests until approved/rejected
 
         return output
 
     except Exception as e:
         logger.error(f"Error executing database code: {e}", exc_info=True)
-        # Rollback on error
+        # Rollback on error - but keep sandbox for potential retry
         if not sandbox._committed:
             sandbox.rollback()
         return f"ERROR: {str(e)}"
-
-    finally:
-        # Always close the underlying session
-        # (operations are preserved for review/approval)
-        if not sandbox._committed:
-            sandbox.close()
 
 
 # ============================================
@@ -319,13 +318,99 @@ class DataManagerCodeAgent:
                 "error": str(e)
             }
 
+    def get_pending_operations(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """
+        Get pending operations for a conversation
+
+        Args:
+            conversation_id: Conversation ID
+
+        Returns:
+            List of pending operation dictionaries
+        """
+        from backend.services.session_sandbox_manager import sandbox_session_manager
+        return sandbox_session_manager.get_pending_operations_summary(conversation_id)
+
+    def has_pending_operations(self, conversation_id: str) -> bool:
+        """
+        Check if conversation has pending operations
+
+        Args:
+            conversation_id: Conversation ID
+
+        Returns:
+            True if pending operations exist
+        """
+        from backend.services.session_sandbox_manager import sandbox_session_manager
+        return sandbox_session_manager.has_pending_operations(conversation_id)
+
+    def approve_and_execute_all(self, conversation_id: str) -> Dict[str, Any]:
+        """
+        Approve and execute all pending operations for a conversation
+
+        This is the NEW method that uses SandboxSessionManager for
+        session-level sandbox management.
+
+        Args:
+            conversation_id: Conversation ID
+
+        Returns:
+            Result dictionary with execution status
+        """
+        from backend.services.session_sandbox_manager import sandbox_session_manager
+
+        try:
+            # Use the manager to approve and execute
+            result = sandbox_session_manager.approve_and_execute_all(
+                SessionLocal(),
+                conversation_id
+            )
+
+            logger.info(f"Approval completed for {conversation_id}: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error approving operations for {conversation_id}: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def reject_and_discard_all(self, conversation_id: str) -> Dict[str, Any]:
+        """
+        Reject and discard all pending operations for a conversation
+
+        Args:
+            conversation_id: Conversation ID
+
+        Returns:
+            Result dictionary with rejection status
+        """
+        from backend.services.session_sandbox_manager import sandbox_session_manager
+
+        try:
+            result = sandbox_session_manager.reject_and_discard_all(conversation_id)
+
+            logger.info(f"Rejection completed for {conversation_id}: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error rejecting operations for {conversation_id}: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
     def execute_pending(
         self,
         operations_data: List[Dict[str, Any]],
         conversation_id: str
     ) -> Dict[str, Any]:
         """
-        Execute approved pending operations
+        Execute approved pending operations (LEGACY METHOD)
+
+        Note: This method is kept for backward compatibility.
+        New code should use approve_and_execute_all() instead.
 
         Args:
             operations_data: List of pending operations to execute
