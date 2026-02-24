@@ -119,52 +119,218 @@ Use the available tools to:
         Returns:
             Compiled StateGraph with checkpointer
         """
+        from langchain_core.messages import AIMessage, HumanMessage
+        import uuid
+
         # Define the workflow
         workflow = StateGraph(MainAgentState)
 
-        # Define nodes
-        async def agent_node(state: MainAgentState) -> Dict[str, Any]:
-            """Agent node that uses LLM to decide what to do"""
-            messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
-            response = await self.llm.ainvoke(messages)
-            return {"messages": [response]}
+        # Intent analysis prompt (internal, not exposed to tools)
+        INTENT_ANALYSIS_PROMPT = """Analyze the user's latest message and determine the intent.
 
-        async def get_question_node(state: MainAgentState) -> Dict[str, Any]:
-            """Get next diagnostic question from EntityGraph"""
+Choose one of the following intents:
+- "database_query": User is asking about their medical data (history, medications, allergies, etc.)
+- "diagnostic_question": User is responding to a diagnostic question
+- "generate_report": All data collected, ready to generate report (accomplish=True)
+- "continue_conversation": General conversational message, need to get next diagnostic question
+
+Return ONLY the intent name."""
+
+        # Agent node with explicit routing
+        async def agent_node(state: MainAgentState) -> Dict[str, Any]:
+            """
+            Agent node that:
+            1. Analyzes user intent
+            2. Routes to appropriate tool node
+            3. Generates conversational responses
+            """
+            # Check if conversation is accomplished - if so, return END signal
+            if state.get("accomplish", False):
+                # Conversation complete, set route to END
+                return {"_route": END}
+
+            messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
+
+            # Get last user message
+            user_message = None
+            for msg in reversed(state["messages"]):
+                if msg.type == "human":
+                    user_message = msg.content
+                    break
+
+            if not user_message:
+                # No user message, start conversation
+                return {"messages": [AIMessage(content="Hello, I'm your medical assistant. Let's start by gathering some information about your health.")], "_route": "get_question_tool"}
+
+            # Analyze intent using LLM (reuse self.llm for consistency)
+            intent_response = await self.llm.ainvoke([
+                SystemMessage(content=INTENT_ANALYSIS_PROMPT),
+                HumanMessage(content=f"User message: {user_message}\nCurrent accomplish state: {state.get('accomplish', False)}")
+            ])
+
+            intent = intent_response.content.strip().lower()
+            logger.info(f"Detected intent: {intent}")
+
+            # Route based on intent
+            if intent == "database_query":
+                # Store intent for routing, call data_manager tool
+                return {
+                    "messages": [AIMessage(content="", tool_calls=[{
+                        "name": "data_manager",
+                        "args": {"question": user_message},
+                        "id": f"data_manager_{uuid.uuid4().hex}"
+                    }])],
+                    "_route": "data_manager_tool"
+                }
+            elif intent == "diagnostic_question":
+                # User is responding to a question, update graph
+                query_message = state.get("last_hint", "")
+                return {
+                    "messages": [AIMessage(content="", tool_calls=[{
+                        "name": "update_diagnosis_graph",
+                        "args": {
+                            "user_response": user_message,
+                            "query_message": query_message
+                        },
+                        "id": f"update_graph_{uuid.uuid4().hex}"
+                    }])],
+                    "_route": "update_graph_tool"
+                }
+            elif intent == "generate_report" or state.get("accomplish", False):
+                # Generate report
+                return {
+                    "messages": [AIMessage(content="", tool_calls=[{
+                        "name": "generate_diagnostic_report",
+                        "args": {},
+                        "id": f"generate_report_{uuid.uuid4().hex}"
+                    }])],
+                    "_route": "generate_report_tool"
+                }
+            else:
+                # Continue conversation, get next question
+                return {
+                    "messages": [AIMessage(content="", tool_calls=[{
+                        "name": "get_next_diagnostic_question",
+                        "args": {},
+                        "id": f"get_question_{uuid.uuid4().hex}"
+                    }])],
+                    "_route": "get_question_tool"
+                }
+
+        # Tool execution nodes
+        async def get_question_tool_node(state: MainAgentState) -> Dict[str, Any]:
+            """Execute get_next_diagnostic_question tool"""
             result = await tools.get_next_diagnostic_question_node(state)
-            # Create a message with the hint for the LLM to formulate
+
+            # Generate conversational question from hint
             hint = result.get("last_hint", "Could you tell me more about your condition?")
-            return {"messages": [AIMessage(content=f"[HINT: {hint}]")]}
+
+            # Use LLM to translate hint into conversational language
+            conversational_prompt = f"""You are a medical assistant. The system suggests asking about: {hint}
+
+Translate this into a warm, natural, conversational question for the patient.
+Be empathetic and professional."""
+
+            response = await self.llm.ainvoke([
+                SystemMessage(content="You are a warm, professional medical assistant."),
+                HumanMessage(content=conversational_prompt)
+            ])
+
+            result["messages"] = [AIMessage(content=response.content)]
+            return result
+
+        async def update_graph_tool_node(state: MainAgentState) -> Dict[str, Any]:
+            """Execute update_diagnosis_graph tool"""
+            # Extract parameters from state's tool call
+            last_message = state["messages"][-1]
+            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                tool_call = last_message.tool_calls[0]
+                user_response = tool_call["args"]["user_response"]
+                query_message = tool_call["args"]["query_message"]
+            else:
+                return {"messages": [AIMessage(content="I apologize, but I couldn't process your response.")], "accomplish": True}
+
+            result = await tools.update_diagnosis_graph_node(state, user_response, query_message)
+
+            # Check for error
+            if "error" in result:
+                return {"messages": [AIMessage(content=f"I apologize, but I'm having trouble with the diagnostic system: {result['error']}")], "accomplish": True}
+
+            # Generate acknowledgment
+            if result.get("accomplish"):
+                ack = "Thank you for that information. I've collected all the necessary data. Let me generate your diagnostic report now."
+            else:
+                ack = "Thank you. Let me ask you about another aspect of your health."
+
+            result["messages"] = [AIMessage(content=ack)]
+            return result
+
+        async def data_manager_tool_node(state: MainAgentState) -> Dict[str, Any]:
+            """Execute data_manager tool"""
+            last_message = state["messages"][-1]
+            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                question = last_message.tool_calls[0]["args"]["question"]
+            else:
+                return {"messages": [AIMessage(content="I couldn't understand your request about the database.")]}
+
+            result_text = await tools.data_manager_node(state, question)
+            return {"messages": [AIMessage(content=result_text)]}
+
+        async def generate_report_tool_node(state: MainAgentState) -> Dict[str, Any]:
+            """Execute generate_diagnostic_report tool"""
+            result = await tools.generate_diagnostic_report_node(state)
+
+            report = result.get("report")
+            if report:
+                summary = f"""
+# Diagnostic Report Complete
+
+## Summary
+{report.get('summary', 'Not available')}
+
+## Key Findings
+{report.get('key_findings', 'Not available')}
+
+## Recommendations
+{report.get('recommendations', 'Not available')}
+
+## Follow-up
+{report.get('follow_up', 'Not available')}
+"""
+                result["messages"] = [AIMessage(content=summary)]
+            else:
+                result["messages"] = [AIMessage(content="I apologize, but I couldn't generate the report.")]
+
+            result["accomplish"] = True
+            return result
+
+        # Routing function
+        def route_from_agent(state: MainAgentState) -> str:
+            """Route based on _route set by agent_node"""
+            return state.get("_route", END)
 
         # Add nodes to graph
         workflow.add_node("agent", agent_node)
-        workflow.add_node("get_question", get_question_node)
+        workflow.add_node("get_question_tool", get_question_tool_node)
+        workflow.add_node("update_graph_tool", update_graph_tool_node)
+        workflow.add_node("data_manager_tool", data_manager_tool_node)
+        workflow.add_node("generate_report_tool", generate_report_tool_node)
 
         # Set entry point
         workflow.set_entry_point("agent")
 
-        # Add conditional edges
-        def should_route(state: MainAgentState) -> str:
-            """Decide next step based on state"""
-            # If accomplished, we're done
-            if state.get("accomplish", False):
-                return END
+        # Add conditional edges from agent
+        workflow.add_conditional_edges("agent", route_from_agent, {
+            "get_question_tool": "get_question_tool",
+            "update_graph_tool": "update_graph_tool",
+            "data_manager_tool": "data_manager_tool",
+            "generate_report_tool": "generate_report_tool",
+            END: END
+        })
 
-            # Otherwise, continue getting questions
-            return "get_question"
-
-        # Agent -> conditional routing
-        workflow.add_conditional_edges(
-            "agent",
-            should_route,
-            {
-                END: END,
-                "get_question": "get_question"
-            }
-        )
-
-        # Get question -> back to agent
-        workflow.add_edge("get_question", "agent")
+        # All tool nodes return to agent (for next turn or to end)
+        for tool_node in ["get_question_tool", "update_graph_tool", "data_manager_tool", "generate_report_tool"]:
+            workflow.add_edge(tool_node, "agent")
 
         # Compile with checkpointer
         return workflow.compile(checkpointer=self.checkpointer)
@@ -264,42 +430,214 @@ Use the available tools to:
         Returns:
             Initialized EntityGraph instance
         """
-        # This will be implemented to integrate with DrHyper
-        # For now, return a mock
         logger.info(f"Creating EntityGraph for patient {patient_id}, target: {target}")
 
-        # Import EntityGraph from DrHyper
         try:
             from drhyper.core.graph import EntityGraph
+            from drhyper.utils.llm_loader import load_chat_model
+            from drhyper.config.settings import ConfigManager as DrHyperConfig
+            from backend.services.patient_context_builder import PatientContextBuilder
+            from backend.database.session import get_db
             import asyncio
+
+            # Load patient context
+            patient_context_builder = PatientContextBuilder()
+            with get_db() as db:
+                patient_context = patient_context_builder.build(db, patient_id)
+
+            logger.info(f"Loaded patient context for {patient_id}: "
+                       f"{len(patient_context.patient_text_records)} text records")
+
+            # Convert PatientContext to dict for EntityGraph
+            patient_context_dict = {
+                "patient_id": patient_context.patient_id,
+                "basic_info": patient_context.basic_info,
+                "patient_text_records": patient_context.patient_text_records
+            }
+
+            # Use DrHyper configuration for EntityGraph models
+            drhyper_config = DrHyperConfig()
+            conv_model = load_chat_model(
+                provider=drhyper_config.conversation_llm.provider,
+                model_name=drhyper_config.conversation_llm.model,
+                api_key=drhyper_config.conversation_llm.api_key,
+                base_url=drhyper_config.conversation_llm.base_url,
+                temperature=drhyper_config.conversation_llm.temperature,
+                max_tokens=drhyper_config.conversation_llm.max_tokens
+            )
+
+            graph_model = load_chat_model(
+                provider=drhyper_config.graph_llm.provider,
+                model_name=drhyper_config.graph_llm.model,
+                api_key=drhyper_config.graph_llm.api_key,
+                base_url=drhyper_config.graph_llm.base_url,
+                temperature=drhyper_config.graph_llm.temperature,
+                max_tokens=drhyper_config.graph_llm.max_tokens
+            )
 
             # EntityGraph initialization is synchronous, run in thread pool
             loop = asyncio.get_event_loop()
+
+            # Create EntityGraph with required parameters
             entity_graph = await loop.run_in_executor(
                 None,
-                lambda: EntityGraph(target=target)
+                lambda: EntityGraph(
+                    target=target,
+                    graph_model=graph_model,
+                    conv_model=conv_model
+                )
             )
-            # Initialize the graph
+
+            # Initialize the graph with patient context
             await loop.run_in_executor(
                 None,
-                lambda: entity_graph.init(save=False)
+                lambda: entity_graph.init(save=False, patient_context=patient_context_dict)
             )
 
+            logger.info("EntityGraph created and initialized successfully with patient context")
             return entity_graph
 
-        except ImportError:
-            logger.error("EntityGraph not available")
-            # Return mock for now
-            mock_graph = Mock()
-            mock_graph.get_hint_message = Mock(
-                return_value=("Tell me about your blood pressure", False, [])
-            )
-            mock_graph.accept_message = Mock(return_value=[])
-            mock_graph._serialize_nodes_with_value = Mock(return_value="No data yet")
-            mock_graph.entity_graph = Mock()
-            mock_graph.entity_graph.nodes = Mock(return_value=[])
-            mock_graph.entity_graph.number_of_nodes = Mock(return_value=0)
-            return mock_graph
+        except Exception as e:
+            logger.error(f"Error creating EntityGraph: {e}")
+            # Return None for testing without full EntityGraph
+            return None
+
+    def get_pending_operations(self, conversation_id: str) -> list:
+        """
+        Get pending database operations for approval.
+
+        When DataManagerCodeAgent performs write operations, they are recorded
+        in a sandbox and require user approval before being committed to the database.
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            List of pending operation dictionaries
+        """
+        try:
+            from backend.agents.data_manager import DataManagerCodeAgent
+            data_manager = DataManagerCodeAgent(config_path=None)
+            return data_manager.get_pending_operations(conversation_id)
+        except Exception as e:
+            logger.error(f"Error getting pending operations: {e}")
+            return []
+
+    def has_pending_operations(self, conversation_id: str) -> bool:
+        """
+        Check if conversation has pending database operations.
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            True if pending operations exist
+        """
+        try:
+            from backend.agents.data_manager import DataManagerCodeAgent
+            data_manager = DataManagerCodeAgent(config_path=None)
+            return data_manager.has_pending_operations(conversation_id)
+        except Exception as e:
+            logger.error(f"Error checking pending operations: {e}")
+            return False
+
+    def approve_and_execute_pending_operations(self, conversation_id: str) -> Dict[str, Any]:
+        """
+        Approve and execute all pending database operations.
+
+        This commits the sandbox operations to the actual database.
+        Call this when the user approves the changes at conversation end.
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            Dict with execution results
+        """
+        try:
+            from backend.agents.data_manager import DataManagerCodeAgent
+            data_manager = DataManagerCodeAgent(config_path=None)
+
+            logger.info(f"Approving and executing pending operations for conversation: {conversation_id}")
+            result = data_manager.approve_and_execute_all(conversation_id)
+
+            return result
+        except Exception as e:
+            logger.error(f"Error approving pending operations: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def end_conversation(
+        self,
+        conversation_id: str
+    ) -> Tuple[str, bool, Optional[list], Optional[dict]]:
+        """
+        End conversation and check for pending operations.
+
+        This should be called when the conversation ends (either by user request
+        or when diagnostic data collection is complete).
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            Tuple of (final_message, has_pending_ops, pending_ops, report)
+        """
+        logger.info(f"Ending conversation: {conversation_id}")
+
+        # Check for pending database operations
+        pending_ops = self.get_pending_operations(conversation_id)
+        has_pending = len(pending_ops) > 0
+
+        # Get final state to check for report
+        config = {"configurable": {"thread_id": conversation_id}}
+        try:
+            state = self.graph.get_state(config)
+            report = state.values.get("report")
+        except Exception as e:
+            logger.error(f"Error getting final state: {e}")
+            report = None
+
+        # Generate end message
+        if has_pending:
+            final_message = self._format_pending_operations(pending_ops)
+        elif report:
+            final_message = self._format_report_message(report)
+        else:
+            final_message = "Conversation ended. Thank you."
+
+        return final_message, has_pending, pending_ops if has_pending else None, report
+
+    def _format_pending_operations(self, pending_ops: list) -> str:
+        """Format pending operations for user approval"""
+        msg = "\n📋 **Pending Database Changes**\n\n"
+        msg += f"There are {len(pending_ops)} operation(s) pending approval:\n\n"
+
+        for i, op in enumerate(pending_ops, 1):
+            msg += f"{i}. **{op.get('operation_type', 'UNKNOWN').upper()}** on `{op.get('table_name', 'unknown')}`\n"
+
+            if op.get('operation_type') == 'insert':
+                details = op.get('details', {})
+                msg += f"   New data: {str(details)[:100]}...\n"
+            elif op.get('operation_type') == 'update':
+                details = op.get('details', {})
+                msg += f"   Changes: {str(details)[:100]}...\n"
+            elif op.get('operation_type') == 'delete':
+                details = op.get('details', {})
+                msg += f"   Deleted: {str(details)[:100]}...\n"
+            msg += "\n"
+
+        msg += "Please review these changes:\n"
+        msg += "- Type **approve** to save all changes\n"
+        msg += "- Type **discard** to cancel all changes\n"
+
+        return msg
+
+    def _format_report_message(self, report: dict) -> str:
+        """Format report message for end of conversation"""
+        return "Conversation ended. Diagnostic report has been generated."
 
 
 # Mock for when EntityGraph is not available

@@ -60,19 +60,27 @@ def update_diagnosis_graph(user_response: str, query_message: str) -> Dict[str, 
 
 
 @tool
-def query_patient_history(question: str) -> str:
+def data_manager(question: str) -> str:
     """
-    Query the patient's medical history from the database.
+    Query or modify patient data in the database.
+
+    This tool handles ALL database-related requests from the user, including:
+    - Reading patient history, medications, allergies, etc.
+    - Updating patient information
+    - Adding new health records
+
+    IMPORTANT: Write operations are recorded in a sandbox and require user approval
+    at the end of the conversation.
 
     Args:
-        question: Natural language query about patient history
+        question: Natural language request about patient data
 
     Returns:
-        Query results as formatted text
+        Query result or confirmation of pending changes
     """
     # This is a simplified tool version
     # In the actual node function, we'll access state["patient_id"]
-    return f"PATIENT_HISTORY_QUERY_PLACEHOLDER: {question}"
+    return f"DATABASE_QUERY_PLACEHOLDER: {question}"
 
 
 @tool
@@ -102,10 +110,16 @@ async def get_next_diagnostic_question_node(state: Dict[str, Any]) -> Dict[str, 
     Has access to full state including entity_graph.
     Updates state with hint and accomplish status.
     """
+    from langchain_core.messages import AIMessage
+
     entity_graph = state.get("entity_graph")
     if not entity_graph:
         logger.warning("entity_graph not found in state")
-        return {"messages": ["I apologize, but I'm having trouble accessing the diagnostic system."]}
+        # Set accomplish=True to stop the loop
+        return {
+            "messages": [AIMessage(content="I apologize, but I'm having trouble accessing the diagnostic system.")],
+            "accomplish": True
+        }
 
     try:
         # Call EntityGraph.get_hint_message()
@@ -120,7 +134,11 @@ async def get_next_diagnostic_question_node(state: Dict[str, Any]) -> Dict[str, 
 
     except Exception as e:
         logger.error(f"Error getting next diagnostic question: {e}")
-        return {"messages": [f"I'm experiencing technical difficulties: {str(e)}"]}
+        # Set accomplish=True to stop the loop on error
+        return {
+            "messages": [AIMessage(content=f"I'm experiencing technical difficulties: {str(e)}")],
+            "accomplish": True
+        }
 
 
 async def update_diagnosis_graph_node(state: Dict[str, Any], user_response: str, query_message: str) -> Dict[str, Any]:
@@ -168,40 +186,66 @@ async def update_diagnosis_graph_node(state: Dict[str, Any], user_response: str,
         return {"error": str(e)}
 
 
-async def query_patient_history_node(state: Dict[str, Any], question: str) -> str:
+async def data_manager_node(state: Dict[str, Any], question: str) -> str:
     """
-    Node function that queries patient history.
+    Node function that handles database requests.
 
     Has access to full state including patient_id.
+    Uses DataManagerCodeAgent with sandbox functionality for database operations.
+
+    Note: Write operations are recorded in the sandbox and require approval.
+
+    Args:
+        state: MainAgentState containing patient_id and conversation_id
+        question: Natural language database query from user
+
+    Returns:
+        Query result or confirmation of pending changes
     """
     patient_id = state.get("patient_id")
+    conversation_id = state.get("conversation_id")
+
     if not patient_id:
         logger.warning("patient_id not found in state")
         return "I'm unable to access patient records."
 
     try:
-        # Import SQLAgent
-        from backend.agents.sql_agent import SQLAgent
+        # Import DataManagerCodeAgent (smolagents-based with sandbox)
+        from backend.agents.data_manager import DataManagerCodeAgent
 
-        # Create SQLAgent instance
-        sql_agent = SQLAgent(config_path=None)
+        # Create DataManagerCodeAgent instance
+        data_manager = DataManagerCodeAgent(config_path=None)
 
         # Formulate request with patient context
         full_request = f"For patient_id={patient_id}: {question}"
 
-        # Process request via SQLAgent
-        result = await sql_agent.process_request(
-            conversation_id=state["conversation_id"],
-            user_request=full_request
+        # Process request via DataManager
+        result = data_manager.process_request(
+            user_request=full_request,
+            conversation_id=conversation_id
         )
 
         if result.get("success"):
-            return result.get("final_answer", "No data found")
+            answer = result.get("final_answer", "No data found")
+
+            # Check if there are pending operations (writes awaiting approval)
+            has_pending = data_manager.has_pending_operations(conversation_id)
+            if has_pending:
+                pending_ops = data_manager.get_pending_operations(conversation_id)
+                pending_count = len(pending_ops)
+                logger.info(f"Query resulted in {pending_count} pending write operations")
+
+                # Append a note about pending operations
+                answer += f"\n\n[Note: {pending_count} database change(s) are pending approval. "
+                answer += f"These will be saved after you approve them at the end of the conversation.]"
+
+            return answer
         else:
-            return f"Error querying patient history: {result.get('error', 'Unknown error')}"
+            error = result.get("error", "Unknown error")
+            return f"Error querying database: {error}"
 
     except Exception as e:
-        logger.error(f"Error querying patient history: {e}")
+        logger.error(f"Error in data_manager_node: {e}", exc_info=True)
         return f"Error: {str(e)}"
 
 

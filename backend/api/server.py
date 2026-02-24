@@ -398,6 +398,345 @@ async def delete_conversation(
 
 
 # ============================================
+# MainAgent API (LangGraph-based)
+# ============================================
+
+# Initialize MainAgent singleton
+_main_agent_instance = None
+
+
+def get_main_agent():
+    """Get or create MainAgent singleton instance"""
+    global _main_agent_instance
+    if _main_agent_instance is None:
+        from backend.agents.main_agent import MainAgent
+        _main_agent_instance = MainAgent()
+        logger.info("MainAgent singleton initialized")
+    return _main_agent_instance
+
+
+class AgentConversationRequest(BaseModel):
+    """Create agent conversation request"""
+    patient_id: str
+    target: str = "Hypertension diagnosis"
+
+
+class AgentConversationResponse(BaseModel):
+    """Create agent conversation response"""
+    conversation_id: str
+    patient_id: str
+    first_message: str
+
+
+class AgentChatRequest(BaseModel):
+    """Agent chat request"""
+    message: str
+
+
+class AgentChatResponse(BaseModel):
+    """Agent chat response"""
+    ai_message: str
+    accomplish: bool = False
+    report: Optional[dict] = None
+    has_pending_operations: bool = False
+
+
+class AgentEndConversationResponse(BaseModel):
+    """Agent end conversation response"""
+    message: str
+    has_pending_operations: bool = False
+    pending_operations: Optional[List[dict]] = None
+    report: Optional[dict] = None
+
+
+class ApproveOperationsRequest(BaseModel):
+    """Approve pending operations request"""
+    confirm: bool = True
+
+
+class ApproveOperationsResponse(BaseModel):
+    """Approve pending operations response"""
+    success: bool
+    message: str
+    executed_count: int = 0
+    error: Optional[str] = None
+
+
+@app.post(
+    "/api/conversations/agent",
+    response_model=AgentConversationResponse,
+    tags=["MainAgent"]
+)
+async def create_agent_conversation(
+    request: AgentConversationRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Create new conversation using MainAgent (LangGraph-based)
+
+    Uses conversation_id as thread_id for LangGraph checkpointer.
+    State is automatically persisted to checkpoint store.
+
+    MainAgent replaces IntentRouter and provides:
+    - Structured diagnostic data collection
+    - Integration with EntityGraph
+    - Sandbox-aware database queries via DataManagerCodeAgent
+    """
+    try:
+        # Verify patient exists
+        patient = patient_service.get_patient(db, request.patient_id)
+        if not patient:
+            raise HTTPException(status_code=404, detail=f"Patient {request.patient_id} not found")
+
+        # Get MainAgent instance
+        agent = get_main_agent()
+
+        # Generate unique conversation ID
+        import uuid
+        conversation_id = str(uuid.uuid4())
+
+        # Start conversation via MainAgent
+        first_message = await agent.astart_conversation(
+            conversation_id=conversation_id,
+            patient_id=request.patient_id,
+            target=request.target
+        )
+
+        # Create database record
+        from backend.database.crud import conversation_crud
+        from datetime import datetime
+
+        db_conv = conversation_crud.create(db, {
+            "id": conversation_id,
+            "patient_id": request.patient_id,
+            "target": request.target,
+            "model_type": "MainAgent",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        })
+
+        logger.info(f"Created MainAgent conversation: {conversation_id}")
+
+        return AgentConversationResponse(
+            conversation_id=conversation_id,
+            patient_id=request.patient_id,
+            first_message=first_message
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create agent conversation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/agent-chat",
+    response_model=AgentChatResponse,
+    tags=["MainAgent"]
+)
+async def agent_chat(
+    conversation_id: str,
+    request: AgentChatRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Send message to MainAgent
+
+    State is automatically loaded/saved via thread_id by checkpointer.
+    No manual state management required.
+
+    Returns AI response along with:
+    - accomplish: Whether data collection is complete
+    - report: Generated diagnostic report (if complete)
+    - has_pending_operations: Whether there are pending DB changes
+    """
+    try:
+        # Verify conversation exists
+        from backend.database.crud import conversation_crud
+        conv = conversation_crud.get(db, conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
+
+        # Get MainAgent instance
+        agent = get_main_agent()
+
+        # Process message via MainAgent
+        ai_message, accomplish, report = await agent.aprocess_message(
+            conversation_id=conversation_id,
+            user_message=request.message
+        )
+
+        # Check for pending operations
+        has_pending = agent.has_pending_operations(conversation_id)
+
+        logger.info(f"Processed agent message for {conversation_id}, accomplish={accomplish}")
+
+        return AgentChatResponse(
+            ai_message=ai_message,
+            accomplish=accomplish,
+            report=report,
+            has_pending_operations=has_pending
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to process agent chat: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/agent-end",
+    response_model=AgentEndConversationResponse,
+    tags=["MainAgent"]
+)
+async def end_agent_conversation(
+    conversation_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    End MainAgent conversation
+
+    Checks for pending database operations and provides summary.
+    User should be prompted to approve pending operations separately.
+    """
+    try:
+        # Verify conversation exists
+        from backend.database.crud import conversation_crud
+        conv = conversation_crud.get(db, conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
+
+        # Get MainAgent instance
+        agent = get_main_agent()
+
+        # End conversation and get final state
+        message, has_pending, pending_ops, report = await agent.end_conversation(
+            conversation_id=conversation_id
+        )
+
+        logger.info(f"Ended agent conversation {conversation_id}, has_pending={has_pending}")
+
+        return AgentEndConversationResponse(
+            message=message,
+            has_pending_operations=has_pending,
+            pending_operations=pending_ops,
+            report=report
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to end agent conversation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/api/conversations/{conversation_id}/pending-operations",
+    tags=["MainAgent"]
+)
+async def get_pending_operations(
+    conversation_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get pending database operations for a conversation
+
+    Returns a list of operations that were recorded in the sandbox
+    and are awaiting user approval.
+    """
+    try:
+        # Verify conversation exists
+        from backend.database.crud import conversation_crud
+        conv = conversation_crud.get(db, conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
+
+        # Get MainAgent instance
+        agent = get_main_agent()
+
+        # Get pending operations
+        pending_ops = agent.get_pending_operations(conversation_id)
+
+        return {
+            "conversation_id": conversation_id,
+            "has_pending": len(pending_ops) > 0,
+            "pending_operations": pending_ops,
+            "count": len(pending_ops)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get pending operations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/approve-operations",
+    response_model=ApproveOperationsResponse,
+    tags=["MainAgent"]
+)
+async def approve_pending_operations(
+    conversation_id: str,
+    request: ApproveOperationsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Approve and execute pending database operations
+
+    This commits the sandbox operations to the actual database.
+    Should be called after user reviews and confirms the pending changes.
+    """
+    try:
+        # Verify conversation exists
+        from backend.database.crud import conversation_crud
+        conv = conversation_crud.get(db, conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
+
+        if not request.confirm:
+            return ApproveOperationsResponse(
+                success=False,
+                message="Approval cancelled by user",
+                executed_count=0
+            )
+
+        # Get MainAgent instance
+        agent = get_main_agent()
+
+        # Approve and execute pending operations
+        result = agent.approve_and_execute_pending_operations(conversation_id)
+
+        if result.get("success"):
+            executed_count = result.get("executed_count", 0)
+            logger.info(f"Approved and executed {executed_count} operations for {conversation_id}")
+
+            return ApproveOperationsResponse(
+                success=True,
+                message=f"Successfully approved and executed {executed_count} database operation(s)",
+                executed_count=executed_count
+            )
+        else:
+            error = result.get("error", "Unknown error")
+            logger.error(f"Failed to approve operations: {error}")
+
+            return ApproveOperationsResponse(
+                success=False,
+                message="Failed to execute pending operations",
+                executed_count=0,
+                error=error
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to approve operations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
 # Startup Instructions
 # ============================================
 
