@@ -73,8 +73,8 @@ async def run_test():
             mock_llm.ainvoke = AsyncMock(side_effect=mock_llm_invoke)
             mock_llm_class.return_value = mock_llm
 
-            # Patch EntityGraph creation
-            with patch.object(MainAgent, '_create_entity_graph', create_mock_entity_graph):
+            # Patch EntityGraphManager.get_or_create to return mock EntityGraph
+            with patch('backend.services.entity_graph_manager.entity_graph_manager.get_or_create', create_mock_entity_graph):
                 agent = MainAgent()
                 print("✓ MainAgent initialized successfully")
                 print(f"  - LLM Model: {agent.config.get_model()}")

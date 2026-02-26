@@ -114,6 +114,10 @@ class Conversation(Base):
     # Stores the graph structure and conversation state
     drhyper_state = Column(JSON, default=dict)
 
+    # EntityGraph State (JSON)
+    # Stores EntityGraph serialization for MainAgent conversations
+    entity_graph_state = Column(JSON, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)

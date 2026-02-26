@@ -31,6 +31,21 @@ class MainAgent:
     - Checkpointer for automatic state persistence
     """
 
+    # Intent analysis prompt for LLM-based classification
+    INTENT_ANALYSIS_PROMPT = """Analyze the user's latest message and determine the intent.
+
+Choose one of the following intents:
+- "database_query": User is asking about their medical data (history, medications, allergies, etc.)
+  Examples: "What medications am I taking?", "Show me my blood pressure records"
+- "diagnostic_question": User is providing health information (symptoms, body sensations, responses to questions)
+  IMPORTANT: ANY message containing symptoms, body sensations, or health-related information MUST be classified as "diagnostic_question"
+  This includes both direct answers AND new volunteered information
+  Examples: "My head hurts", "130/85", "Yes, I have headaches", "By the way, I also feel dizzy sometimes"
+- "continue_conversation": Greetings, goodbyes, thank you, or other non-medical conversational messages
+  Examples: "Hello", "Thank you", "Goodbye"
+
+Return ONLY the intent name."""
+
     def __init__(self, config_path: Optional[str] = None):
         """
         Initialize MainAgent
@@ -56,6 +71,10 @@ class MainAgent:
 
         # Create checkpointer for state persistence
         self.checkpointer = get_checkpointer(self.config)
+
+        # Reference EntityGraphManager singleton for EntityGraph management
+        from backend.services.entity_graph_manager import entity_graph_manager
+        self.entity_graph_manager = entity_graph_manager
 
         # Load system prompt
         self.system_prompt = self._load_system_prompt()
@@ -112,6 +131,102 @@ Use the available tools to:
 - Be empathetic and professional in all interactions
 """
 
+    async def _agent_node(self, state: MainAgentState) -> Dict[str, Any]:
+        """
+        Agent node that:
+        1. Checks if conversation should end (report generated)
+        2. Checks if returning from a tool (show response to user)
+        3. Analyzes user intent
+        4. Routes to appropriate tool node
+        5. Generates conversational responses
+        """
+        from langchain_core.messages import AIMessage
+
+        # Check if report was generated - if so, END the conversation
+        # This happens after generate_report_tool routes back to agent
+        if state.get("accomplish", False) and state.get("report"):
+            # Report generated, show it to user and end conversation
+            # The report message is already in the messages list from generate_report_tool
+            logger.info("Report generated, ending conversation")
+            return {"_route": END}
+
+        messages_list = state.get("messages", [])
+
+        # Check if we're returning from a tool node (last message is AI, not followed by new human message)
+        if messages_list and messages_list[-1].type == "ai":
+            # Last message is AI - check if there's a human message after it (new user input)
+            has_new_human_input = False
+            for i in range(len(messages_list) - 2, -1, -1):
+                if messages_list[i].type == "human":
+                    has_new_human_input = True
+                    break
+                elif messages_list[i].type == "ai":
+                    # Found another AI message before a human one - no new input
+                    break
+
+            if not has_new_human_input:
+                # Last message is AI from a tool, no new human input after it - show to user
+                logger.info("Returning from tool, ending to show response to user")
+                return {"_route": END}
+
+        messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
+
+        # Get last user message
+        user_message = None
+        for msg in reversed(state["messages"]):
+            if msg.type == "human":
+                user_message = msg.content
+                break
+
+        if not user_message:
+            # No user message yet - check if this is the initial start
+            if len(state.get("messages", [])) == 0:
+                # Initial start - route to get_question_tool to get first question
+                # Don't generate a message, let get_question_tool handle it
+                return {"_route": "get_question_tool"}
+            else:
+                # We have messages but no human message - should END to show AI message
+                return {"_route": END}
+
+        # Analyze intent using LLM (reuse self.llm for consistency)
+        intent_response = await self.llm.ainvoke([
+            SystemMessage(content=self.INTENT_ANALYSIS_PROMPT),
+            HumanMessage(content=f"User message: {user_message}\nCurrent accomplish state: {state.get('accomplish', False)}")
+        ])
+
+        intent = intent_response.content.strip().lower()
+        logger.info(f"Detected intent: {intent}")
+
+        # Route based on intent
+        if intent == "database_query":
+            # Store intent for routing, call data_manager tool
+            return {
+                "messages": [AIMessage(content="", tool_calls=[{
+                    "name": "data_manager",
+                    "args": {"question": user_message},
+                    "id": f"data_manager_{uuid.uuid4().hex}"
+                }])],
+                "_route": "data_manager_tool"
+            }
+        else:
+            # For all other intents (diagnostic_question, continue_conversation):
+            # Route to get_question_tool
+            # Note: If user is responding to a diagnostic question, routing_node
+            # will have already routed directly to update_graph_tool, bypassing agent.
+            # We only reach here for:
+            # 1. Greetings/conversational messages
+            # 2. Volunteered health information (not responding to a question)
+            # For volunteered info, get_question_tool will call EntityGraph which
+            # can process it through its accept_message() or get_hint_message() methods
+            return {
+                "messages": [AIMessage(content="", tool_calls=[{
+                    "name": "get_next_diagnostic_question",
+                    "args": {},
+                    "id": f"get_question_{uuid.uuid4().hex}"
+                }])],
+                "_route": "get_question_tool"
+            }
+
     def _build_graph(self) -> StateGraph:
         """
         Build LangGraph StateGraph with nodes and edges
@@ -119,218 +234,56 @@ Use the available tools to:
         Returns:
             Compiled StateGraph with checkpointer
         """
-        from langchain_core.messages import AIMessage, HumanMessage
-        import uuid
+        # Import nodes module
+        from backend.agents.main_agent import nodes
 
         # Define the workflow
         workflow = StateGraph(MainAgentState)
 
-        # Intent analysis prompt (internal, not exposed to tools)
-        INTENT_ANALYSIS_PROMPT = """Analyze the user's latest message and determine the intent.
+        # Add pure nodes from nodes module
+        workflow.add_node("routing", nodes.routing_node)
+        workflow.add_node("get_question_tool", nodes.get_question_tool_node)
+        workflow.add_node("update_graph_tool", nodes.update_graph_tool_node)
+        workflow.add_node("data_manager_tool", nodes.data_manager_tool_node)
+        workflow.add_node("generate_report_tool", nodes.generate_report_tool_node)
 
-Choose one of the following intents:
-- "database_query": User is asking about their medical data (history, medications, allergies, etc.)
-- "diagnostic_question": User is responding to a diagnostic question
-- "generate_report": All data collected, ready to generate report (accomplish=True)
-- "continue_conversation": General conversational message, need to get next diagnostic question
+        # Add LLM-dependent agent node as class method (bound to self)
+        workflow.add_node("agent", self._agent_node)
 
-Return ONLY the intent name."""
+        # Set entry point to routing_node
+        workflow.set_entry_point("routing")
 
-        # Agent node with explicit routing
-        async def agent_node(state: MainAgentState) -> Dict[str, Any]:
-            """
-            Agent node that:
-            1. Analyzes user intent
-            2. Routes to appropriate tool node
-            3. Generates conversational responses
-            """
-            # Check if conversation is accomplished - if so, return END signal
-            if state.get("accomplish", False):
-                # Conversation complete, set route to END
-                return {"_route": END}
-
-            messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
-
-            # Get last user message
-            user_message = None
-            for msg in reversed(state["messages"]):
-                if msg.type == "human":
-                    user_message = msg.content
-                    break
-
-            if not user_message:
-                # No user message, start conversation
-                return {"messages": [AIMessage(content="Hello, I'm your medical assistant. Let's start by gathering some information about your health.")], "_route": "get_question_tool"}
-
-            # Analyze intent using LLM (reuse self.llm for consistency)
-            intent_response = await self.llm.ainvoke([
-                SystemMessage(content=INTENT_ANALYSIS_PROMPT),
-                HumanMessage(content=f"User message: {user_message}\nCurrent accomplish state: {state.get('accomplish', False)}")
-            ])
-
-            intent = intent_response.content.strip().lower()
-            logger.info(f"Detected intent: {intent}")
-
-            # Route based on intent
-            if intent == "database_query":
-                # Store intent for routing, call data_manager tool
-                return {
-                    "messages": [AIMessage(content="", tool_calls=[{
-                        "name": "data_manager",
-                        "args": {"question": user_message},
-                        "id": f"data_manager_{uuid.uuid4().hex}"
-                    }])],
-                    "_route": "data_manager_tool"
-                }
-            elif intent == "diagnostic_question":
-                # User is responding to a question, update graph
-                query_message = state.get("last_hint", "")
-                return {
-                    "messages": [AIMessage(content="", tool_calls=[{
-                        "name": "update_diagnosis_graph",
-                        "args": {
-                            "user_response": user_message,
-                            "query_message": query_message
-                        },
-                        "id": f"update_graph_{uuid.uuid4().hex}"
-                    }])],
-                    "_route": "update_graph_tool"
-                }
-            elif intent == "generate_report" or state.get("accomplish", False):
-                # Generate report
-                return {
-                    "messages": [AIMessage(content="", tool_calls=[{
-                        "name": "generate_diagnostic_report",
-                        "args": {},
-                        "id": f"generate_report_{uuid.uuid4().hex}"
-                    }])],
-                    "_route": "generate_report_tool"
-                }
-            else:
-                # Continue conversation, get next question
-                return {
-                    "messages": [AIMessage(content="", tool_calls=[{
-                        "name": "get_next_diagnostic_question",
-                        "args": {},
-                        "id": f"get_question_{uuid.uuid4().hex}"
-                    }])],
-                    "_route": "get_question_tool"
-                }
-
-        # Tool execution nodes
-        async def get_question_tool_node(state: MainAgentState) -> Dict[str, Any]:
-            """Execute get_next_diagnostic_question tool"""
-            result = await tools.get_next_diagnostic_question_node(state)
-
-            # Generate conversational question from hint
-            hint = result.get("last_hint", "Could you tell me more about your condition?")
-
-            # Use LLM to translate hint into conversational language
-            conversational_prompt = f"""You are a medical assistant. The system suggests asking about: {hint}
-
-Translate this into a warm, natural, conversational question for the patient.
-Be empathetic and professional."""
-
-            response = await self.llm.ainvoke([
-                SystemMessage(content="You are a warm, professional medical assistant."),
-                HumanMessage(content=conversational_prompt)
-            ])
-
-            result["messages"] = [AIMessage(content=response.content)]
-            return result
-
-        async def update_graph_tool_node(state: MainAgentState) -> Dict[str, Any]:
-            """Execute update_diagnosis_graph tool"""
-            # Extract parameters from state's tool call
-            last_message = state["messages"][-1]
-            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-                tool_call = last_message.tool_calls[0]
-                user_response = tool_call["args"]["user_response"]
-                query_message = tool_call["args"]["query_message"]
-            else:
-                return {"messages": [AIMessage(content="I apologize, but I couldn't process your response.")], "accomplish": True}
-
-            result = await tools.update_diagnosis_graph_node(state, user_response, query_message)
-
-            # Check for error
-            if "error" in result:
-                return {"messages": [AIMessage(content=f"I apologize, but I'm having trouble with the diagnostic system: {result['error']}")], "accomplish": True}
-
-            # Generate acknowledgment
-            if result.get("accomplish"):
-                ack = "Thank you for that information. I've collected all the necessary data. Let me generate your diagnostic report now."
-            else:
-                ack = "Thank you. Let me ask you about another aspect of your health."
-
-            result["messages"] = [AIMessage(content=ack)]
-            return result
-
-        async def data_manager_tool_node(state: MainAgentState) -> Dict[str, Any]:
-            """Execute data_manager tool"""
-            last_message = state["messages"][-1]
-            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-                question = last_message.tool_calls[0]["args"]["question"]
-            else:
-                return {"messages": [AIMessage(content="I couldn't understand your request about the database.")]}
-
-            result_text = await tools.data_manager_node(state, question)
-            return {"messages": [AIMessage(content=result_text)]}
-
-        async def generate_report_tool_node(state: MainAgentState) -> Dict[str, Any]:
-            """Execute generate_diagnostic_report tool"""
-            result = await tools.generate_diagnostic_report_node(state)
-
-            report = result.get("report")
-            if report:
-                summary = f"""
-# Diagnostic Report Complete
-
-## Summary
-{report.get('summary', 'Not available')}
-
-## Key Findings
-{report.get('key_findings', 'Not available')}
-
-## Recommendations
-{report.get('recommendations', 'Not available')}
-
-## Follow-up
-{report.get('follow_up', 'Not available')}
-"""
-                result["messages"] = [AIMessage(content=summary)]
-            else:
-                result["messages"] = [AIMessage(content="I apologize, but I couldn't generate the report.")]
-
-            result["accomplish"] = True
-            return result
-
-        # Routing function
-        def route_from_agent(state: MainAgentState) -> str:
-            """Route based on _route set by agent_node"""
-            return state.get("_route", END)
-
-        # Add nodes to graph
-        workflow.add_node("agent", agent_node)
-        workflow.add_node("get_question_tool", get_question_tool_node)
-        workflow.add_node("update_graph_tool", update_graph_tool_node)
-        workflow.add_node("data_manager_tool", data_manager_tool_node)
-        workflow.add_node("generate_report_tool", generate_report_tool_node)
-
-        # Set entry point
-        workflow.set_entry_point("agent")
+        # Add conditional edges from routing_node
+        workflow.add_conditional_edges("routing", nodes.route_from_routing, {
+            "update_graph_tool": "update_graph_tool",
+            "agent": "agent"
+        })
 
         # Add conditional edges from agent
-        workflow.add_conditional_edges("agent", route_from_agent, {
+        workflow.add_conditional_edges("agent", nodes.route_from_agent, {
             "get_question_tool": "get_question_tool",
-            "update_graph_tool": "update_graph_tool",
             "data_manager_tool": "data_manager_tool",
             "generate_report_tool": "generate_report_tool",
             END: END
         })
 
-        # All tool nodes return to agent (for next turn or to end)
-        for tool_node in ["get_question_tool", "update_graph_tool", "data_manager_tool", "generate_report_tool"]:
-            workflow.add_edge(tool_node, "agent")
+        # Add conditional edges from get_question_tool
+        workflow.add_conditional_edges("get_question_tool", nodes.route_from_get_question, {
+            "generate_report_tool": "generate_report_tool",
+            "agent": "agent"
+        })
+
+        # Add conditional edges from update_graph_tool
+        workflow.add_conditional_edges("update_graph_tool", nodes.route_from_update_graph, {
+            "generate_report_tool": "generate_report_tool",
+            "agent": "agent"
+        })
+
+        # data_manager_tool always returns to agent
+        workflow.add_edge("data_manager_tool", "agent")
+
+        # generate_report_tool returns to agent (agent will decide to END)
+        workflow.add_edge("generate_report_tool", "agent")
 
         # Compile with checkpointer
         return workflow.compile(checkpointer=self.checkpointer)
@@ -354,16 +307,23 @@ Be empathetic and professional."""
         """
         logger.info(f"Starting conversation: {conversation_id} for patient: {patient_id}")
 
-        # Initialize EntityGraph
-        entity_graph = await self._create_entity_graph(patient_id, target)
+        # Get or create EntityGraph via manager (pre-loads into cache)
+        entity_graph = self.entity_graph_manager.get_or_create(
+            conversation_id=conversation_id,
+            patient_id=patient_id,
+            target=target
+        )
 
-        # Create initial state
+        if not entity_graph:
+            logger.error("Failed to create EntityGraph")
+            return "I apologize, but I'm having trouble starting the conversation."
+
+        # Create initial state (NO entity_graph in state!)
         config = {"configurable": {"thread_id": conversation_id}}
         initial_state: MainAgentState = {
             "messages": [],
             "conversation_id": conversation_id,
             "patient_id": patient_id,
-            "entity_graph": entity_graph,
             "accomplish": False,
             "report": None,
             "last_hint": ""
@@ -400,9 +360,12 @@ Be empathetic and professional."""
 
         config = {"configurable": {"thread_id": conversation_id}}
 
-        # Add user message to state
+        # Add user message to state AND set human_message for routing
         result = await self.graph.ainvoke(
-            {"messages": [HumanMessage(content=user_message)]},
+            {
+                "messages": [HumanMessage(content=user_message)],
+                "human_message": user_message  # Set for routing_node to check
+            },
             config
         )
 
@@ -418,89 +381,6 @@ Be empathetic and professional."""
         logger.info(f"Response generated, accomplish={accomplish}")
 
         return ai_message, accomplish, report
-
-    async def _create_entity_graph(self, patient_id: str, target: str):
-        """
-        Create EntityGraph for the conversation
-
-        Args:
-            patient_id: Patient identifier
-            target: Diagnostic target
-
-        Returns:
-            Initialized EntityGraph instance
-        """
-        logger.info(f"Creating EntityGraph for patient {patient_id}, target: {target}")
-
-        try:
-            from drhyper.core.graph import EntityGraph
-            from drhyper.utils.llm_loader import load_chat_model
-            from drhyper.config.settings import ConfigManager as DrHyperConfig
-            from backend.services.patient_context_builder import PatientContextBuilder
-            from backend.database.session import get_db
-            import asyncio
-
-            # Load patient context
-            patient_context_builder = PatientContextBuilder()
-            with get_db() as db:
-                patient_context = patient_context_builder.build(db, patient_id)
-
-            logger.info(f"Loaded patient context for {patient_id}: "
-                       f"{len(patient_context.patient_text_records)} text records")
-
-            # Convert PatientContext to dict for EntityGraph
-            patient_context_dict = {
-                "patient_id": patient_context.patient_id,
-                "basic_info": patient_context.basic_info,
-                "patient_text_records": patient_context.patient_text_records
-            }
-
-            # Use DrHyper configuration for EntityGraph models
-            drhyper_config = DrHyperConfig()
-            conv_model = load_chat_model(
-                provider=drhyper_config.conversation_llm.provider,
-                model_name=drhyper_config.conversation_llm.model,
-                api_key=drhyper_config.conversation_llm.api_key,
-                base_url=drhyper_config.conversation_llm.base_url,
-                temperature=drhyper_config.conversation_llm.temperature,
-                max_tokens=drhyper_config.conversation_llm.max_tokens
-            )
-
-            graph_model = load_chat_model(
-                provider=drhyper_config.graph_llm.provider,
-                model_name=drhyper_config.graph_llm.model,
-                api_key=drhyper_config.graph_llm.api_key,
-                base_url=drhyper_config.graph_llm.base_url,
-                temperature=drhyper_config.graph_llm.temperature,
-                max_tokens=drhyper_config.graph_llm.max_tokens
-            )
-
-            # EntityGraph initialization is synchronous, run in thread pool
-            loop = asyncio.get_event_loop()
-
-            # Create EntityGraph with required parameters
-            entity_graph = await loop.run_in_executor(
-                None,
-                lambda: EntityGraph(
-                    target=target,
-                    graph_model=graph_model,
-                    conv_model=conv_model
-                )
-            )
-
-            # Initialize the graph with patient context
-            await loop.run_in_executor(
-                None,
-                lambda: entity_graph.init(save=False, patient_context=patient_context_dict)
-            )
-
-            logger.info("EntityGraph created and initialized successfully with patient context")
-            return entity_graph
-
-        except Exception as e:
-            logger.error(f"Error creating EntityGraph: {e}")
-            # Return None for testing without full EntityGraph
-            return None
 
     def get_pending_operations(self, conversation_id: str) -> list:
         """
@@ -586,6 +466,9 @@ Be empathetic and professional."""
             Tuple of (final_message, has_pending_ops, pending_ops, report)
         """
         logger.info(f"Ending conversation: {conversation_id}")
+
+        # Invalidate EntityGraph from cache to free memory
+        self.entity_graph_manager.invalidate(conversation_id)
 
         # Check for pending database operations
         pending_ops = self.get_pending_operations(conversation_id)

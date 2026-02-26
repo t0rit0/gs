@@ -107,14 +107,20 @@ async def get_next_diagnostic_question_node(state: Dict[str, Any]) -> Dict[str, 
     """
     Node function that gets the next diagnostic question.
 
-    Has access to full state including entity_graph.
+    Gets EntityGraph from EntityGraphManager using conversation_id.
     Updates state with hint and accomplish status.
     """
     from langchain_core.messages import AIMessage
+    from backend.services.entity_graph_manager import entity_graph_manager
 
-    entity_graph = state.get("entity_graph")
+    # Get EntityGraph from manager
+    entity_graph = entity_graph_manager.get_or_create(
+        conversation_id=state.get("conversation_id", ""),
+        patient_id=state.get("patient_id", "")
+    )
+
     if not entity_graph:
-        logger.warning("entity_graph not found in state")
+        logger.warning("EntityGraph not available from manager")
         # Set accomplish=True to stop the loop
         return {
             "messages": [AIMessage(content="I apologize, but I'm having trouble accessing the diagnostic system.")],
@@ -126,6 +132,9 @@ async def get_next_diagnostic_question_node(state: Dict[str, Any]) -> Dict[str, 
         hint_message, accomplish, log_messages = entity_graph.get_hint_message()
 
         logger.info(f"Got hint message: {hint_message[:100]}... accomplish={accomplish}")
+
+        # Save EntityGraph state to database
+        entity_graph_manager.save_state(state["conversation_id"])
 
         return {
             "last_hint": hint_message,
@@ -253,11 +262,18 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
     """
     Node function that generates the diagnostic report.
 
-    Has access to full state including entity_graph.
+    Gets EntityGraph from EntityGraphManager using conversation_id.
     """
-    entity_graph = state.get("entity_graph")
+    from backend.services.entity_graph_manager import entity_graph_manager
+
+    # Get EntityGraph from manager
+    entity_graph = entity_graph_manager.get_or_create(
+        conversation_id=state.get("conversation_id", ""),
+        patient_id=state.get("patient_id", "")
+    )
+
     if not entity_graph:
-        logger.error("entity_graph not found in state")
+        logger.error("EntityGraph not available from manager")
         return {"error": "Entity graph not available", "summary": "Unable to generate report"}
 
     try:

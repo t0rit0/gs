@@ -24,12 +24,17 @@ class MainAgentState(TypedDict, total=False):
     conversation_id: str                      # Unique conversation identifier (used as thread_id)
     patient_id: str                           # Patient identifier for this conversation
 
-    # EntityGraph state (optional for testing/mocking)
-    entity_graph: Optional[Any]               # DrHyper EntityGraph instance (will be properly typed)
+    # EntityGraph is now managed by EntityGraphManager, NOT stored in state
+    # Use conversation_id to retrieve EntityGraph instances via EntityGraphManager
 
     # Diagnostic state
     accomplish: bool                          # Whether diagnosis data collection is complete
     last_hint: str                            # Last hint message from get_hint_message
+
+    # Workflow routing fields (eliminate redundant intent analysis)
+    hint_message: Optional[str]               # Hint from EntityGraph (for routing check)
+    query_message: Optional[str]              # Conversational question shown to user
+    human_message: Optional[str]              # User's response (for routing check)
 
     # Report
     report: Optional[Dict[str, Any]]          # Generated diagnostic report (when accomplish=True)

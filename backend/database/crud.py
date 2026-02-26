@@ -446,6 +446,38 @@ class ConversationCRUD:
         return db_conv
 
     @staticmethod
+    def update_entity_graph_state(
+        db: Session,
+        conversation_id: str,
+        entity_graph_state: Dict[str, Any]
+    ) -> Optional[Conversation]:
+        """
+        Update EntityGraph state for a conversation
+
+        Args:
+            db: Database session
+            conversation_id: Conversation UUID
+            entity_graph_state: EntityGraph state dictionary
+
+        Returns:
+            Updated Conversation object or None
+        """
+        db_conv = ConversationCRUD.get(db, conversation_id)
+        if not db_conv:
+            return None
+
+        db_conv.entity_graph_state = entity_graph_state
+        db_conv.updated_at = datetime.now()
+
+        # Flag the JSON field as modified for SQLAlchemy
+        flag_modified(db_conv, "entity_graph_state")
+
+        db.commit()
+        db.refresh(db_conv)
+
+        return db_conv
+
+    @staticmethod
     def close(db: Session, conversation_id: str) -> Optional[Conversation]:
         """
         Close a conversation (mark as completed)
