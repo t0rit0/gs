@@ -21,7 +21,8 @@ from backend.database.base import get_db
 from backend.database.schemas import (
     PatientCreate, PatientResponse, PatientUpdate,
     ConversationResponse,
-    MessageResponse
+    MessageResponse,
+    ReportCreate, ReportResponse, ReportUpdate, ReportApproval
 )
 
 # Service layer
@@ -734,6 +735,222 @@ async def approve_pending_operations(
     except Exception as e:
         logger.error(f"Failed to approve operations: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# Medical Report API
+# ============================================
+
+@app.get(
+    "/api/conversations/{conversation_id}/report",
+    response_model=ReportResponse,
+    tags=["Reports"]
+)
+async def get_conversation_report(
+    conversation_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get the medical report for a conversation
+
+    Returns the report if one has been generated for this conversation.
+    """
+    from backend.database.crud import report_crud, conversation_crud
+
+    # Verify conversation exists
+    conv = conversation_crud.get(db, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    report = report_crud.get_by_conversation(db, conversation_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="No report found for this conversation")
+
+    return report
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/report",
+    response_model=ReportResponse,
+    tags=["Reports"]
+)
+async def create_conversation_report(
+    conversation_id: str,
+    report_data: ReportCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a medical report for a conversation
+
+    This is typically called automatically when a report is generated,
+    but can also be called manually if needed.
+    """
+    from backend.database.crud import report_crud, conversation_crud
+
+    # Verify conversation exists
+    conv = conversation_crud.get(db, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Check if report already exists
+    existing = report_crud.get_by_conversation(db, conversation_id)
+    if existing:
+        raise HTTPException(status_code=400, detail="Report already exists for this conversation")
+
+    # Create report
+    report = report_crud.create(db, report_data)
+
+    # Update conversation report_status
+    conversation_crud.update(db, conversation_id, type('obj', (object,), {'report_status': 'generated'})())
+
+    logger.info(f"Created report {report.report_id} for conversation {conversation_id}")
+
+    return report
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/approve-report",
+    response_model=ReportResponse,
+    tags=["Reports"]
+)
+async def approve_conversation_report(
+    conversation_id: str,
+    approval: ReportApproval,
+    db: Session = Depends(get_db)
+):
+    """
+    Approve or reject a medical report
+
+    After approval, the report is stored permanently and can be used
+    for future consultation context.
+
+    Args:
+        approved: True to approve, False to reject
+        notes: Optional notes about the approval/rejection
+    """
+    from backend.database.crud import report_crud, conversation_crud
+
+    # Verify conversation exists
+    conv = conversation_crud.get(db, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Get report
+    report = report_crud.get_by_conversation(db, conversation_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="No report found for this conversation")
+
+    if report.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Report already {report.status}")
+
+    # Approve or reject
+    updated_report = report_crud.approve(db, report.report_id, approval)
+
+    # Update conversation report_status
+    new_status = "approved" if approval.approved else "rejected"
+    conversation_crud.update(db, conversation_id, type('obj', (object,), {'report_status': new_status})())
+
+    logger.info(f"Report {report.report_id} {new_status} for conversation {conversation_id}")
+
+    return updated_report
+
+
+@app.get(
+    "/api/patients/{patient_id}/reports",
+    response_model=List[ReportResponse],
+    tags=["Reports"]
+)
+async def get_patient_reports(
+    patient_id: str,
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all medical reports for a patient
+
+    Returns reports ordered by creation date (newest first).
+    """
+    from backend.database.crud import report_crud, patient_crud
+
+    # Verify patient exists
+    patient = patient_crud.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    reports, total = report_crud.list_by_patient(db, patient_id, limit=limit)
+    return reports
+
+
+@app.get(
+    "/api/reports/{report_id}",
+    response_model=ReportResponse,
+    tags=["Reports"]
+)
+async def get_report(
+    report_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get a specific medical report by ID"""
+    from backend.database.crud import report_crud
+
+    report = report_crud.get(db, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    return report
+
+
+@app.put(
+    "/api/reports/{report_id}",
+    response_model=ReportResponse,
+    tags=["Reports"]
+)
+async def update_report(
+    report_id: str,
+    update_data: ReportUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    Update report content
+
+    Can only update reports that are in 'pending' status.
+    """
+    from backend.database.crud import report_crud
+
+    report = report_crud.get(db, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    if report.status != "pending":
+        raise HTTPException(status_code=400, detail="Can only update pending reports")
+
+    updated_report = report_crud.update(db, report_id, update_data)
+    logger.info(f"Updated report {report_id}")
+
+    return updated_report
+
+
+@app.delete(
+    "/api/reports/{report_id}",
+    tags=["Reports"]
+)
+async def delete_report(
+    report_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a medical report
+
+    Warning: This operation is irreversible!
+    """
+    from backend.database.crud import report_crud
+
+    success = report_crud.delete(db, report_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    logger.info(f"Deleted report {report_id}")
+    return {"message": "Report deleted successfully"}
 
 
 # ============================================

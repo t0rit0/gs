@@ -167,3 +167,82 @@ class BackendClient:
     def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Delete a conversation (cascades to messages and images)"""
         return self._request("DELETE", f"/api/conversations/{conversation_id}")
+
+    # ============================================
+    # Medical Report Management
+    # ============================================
+
+    def get_report(self, conversation_id: str) -> dict[str, Any]:
+        """Get report for a conversation"""
+        return self._request("GET", f"/api/conversations/{conversation_id}/report")
+
+    def create_report(
+        self,
+        conversation_id: str,
+        patient_id: str,
+        report_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Create a new medical report"""
+        payload = {
+            "patient_id": patient_id,
+            "conversation_id": conversation_id,
+            **report_data
+        }
+        return self._request("POST", f"/api/conversations/{conversation_id}/report", json=payload)
+
+    def approve_report(
+        self,
+        conversation_id: str,
+        approved: bool,
+        notes: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Approve or reject a report
+
+        Args:
+            conversation_id: Conversation ID
+            approved: True to approve, False to reject
+            notes: Optional notes about the decision
+        """
+        payload = {"approved": approved}
+        if notes:
+            payload["notes"] = notes
+        return self._request("POST", f"/api/conversations/{conversation_id}/approve-report", json=payload)
+
+    def update_report(
+        self,
+        conversation_id: str,
+        report_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update report content before approval"""
+        return self._request("PUT", f"/api/conversations/{conversation_id}/report", json=report_data)
+
+    def get_patient_reports(
+        self,
+        patient_id: str,
+        limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Get all reports for a patient"""
+        return self._request("GET", f"/api/patients/{patient_id}/reports", params={"limit": limit})
+
+    def get_pending_operations(self, conversation_id: str) -> dict[str, Any]:
+        """Get pending database operations for a conversation"""
+        return self._request("GET", f"/api/conversations/{conversation_id}/pending-operations")
+
+    def approve_operations(
+        self,
+        conversation_id: str,
+        confirm: bool = True
+    ) -> dict[str, Any]:
+        """
+        Approve or reject pending database operations
+
+        Args:
+            conversation_id: Conversation ID
+            confirm: True to approve and execute, False to reject
+
+        Returns:
+            Result with executed_count on success
+        """
+        payload = {"confirm": confirm}
+        return self._request("POST", f"/api/conversations/{conversation_id}/approve-operations", json=payload)

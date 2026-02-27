@@ -39,5 +39,10 @@ class MainAgentState(TypedDict, total=False):
     # Report
     report: Optional[Dict[str, Any]]          # Generated diagnostic report (when accomplish=True)
 
+    # Report Approval State
+    report_status: Optional[str]              # Report status: "none", "generated", "pending_approval", "approved", "rejected"
+    report_id: Optional[str]                 # Report ID after creation
+    approval_notes: Optional[str]             # Doctor's notes during approval/rejection
+
     # Internal routing field (not persisted)
     _route: Optional[str]                     # Next node to route to (set by agent_node)

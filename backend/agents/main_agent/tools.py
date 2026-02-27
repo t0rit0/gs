@@ -263,7 +263,10 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
     Node function that generates the diagnostic report.
 
     Gets EntityGraph from EntityGraphManager using conversation_id.
+    Returns a structured report in JSON format for database storage.
     """
+    import json
+    from pathlib import Path
     from backend.services.entity_graph_manager import entity_graph_manager
 
     # Get EntityGraph from manager
@@ -282,6 +285,30 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
 
         logger.info(f"Generating report with {len(collected_data)} characters of collected data")
 
+        # Load report template
+        template_path = Path(__file__).parent.parent.parent / "prompts" / "report_template.txt"
+        if template_path.exists():
+            template = template_path.read_text()
+            prompt = template.format(collected_data=collected_data)
+        else:
+            # Fallback to inline prompt
+            prompt = f"""You are a medical assistant generating a diagnostic report for hypertension assessment.
+
+Output your response as a valid JSON object with the following structure:
+{{
+    "summary": "Brief overview of the patient's condition",
+    "key_findings": "Important clinical observations",
+    "recommendations": "Treatment and lifestyle recommendations",
+    "follow_up": "Recommended follow-up schedule",
+    "risk_level": "low/medium/high",
+    "additional_notes": "Any other relevant information"
+}}
+
+Based on the following collected patient information:
+{collected_data}
+
+Generate a comprehensive diagnostic report in JSON format."""
+
         # Get LLM configuration
         config = get_config()
         llm = ChatOpenAI(
@@ -292,38 +319,68 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
         )
 
         # Generate report using LLM
-        prompt = f"""You are a medical assistant generating a diagnostic report for hypertension assessment.
-
-Based on the following collected patient information, generate a structured diagnostic report:
-
-{collected_data}
-
-Please provide a report with the following sections:
-1. Summary: Brief overview of the patient's condition
-2. Key Findings: Important clinical observations
-3. Recommendations: Lifestyle and treatment recommendations
-4. Follow-up: Recommended follow-up schedule
-
-Format the report in a clear, professional manner suitable for medical documentation."""
-
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         report_text = response.content
 
-        # Parse report into sections
-        report = {
-            "summary": _extract_section(report_text, "Summary"),
-            "key_findings": _extract_section(report_text, "Key Findings"),
-            "recommendations": _extract_section(report_text, "Recommendations"),
-            "follow_up": _extract_section(report_text, "Follow-up"),
-            "full_report": report_text
-        }
+        # Try to parse as JSON
+        report = _parse_structured_report(report_text)
+
+        # Add report status
+        report["report_status"] = "generated"
 
         logger.info("Diagnostic report generated successfully")
-        return {"report": report}
+        return {
+            "report": report,
+            "report_status": "generated"
+        }
 
     except Exception as e:
         logger.error(f"Error generating diagnostic report: {e}")
-        return {"error": str(e), "summary": f"Error generating report: {str(e)}"}
+        return {
+            "error": str(e),
+            "report": {
+                "summary": f"Error generating report: {str(e)}",
+                "key_findings": "",
+                "recommendations": "",
+                "follow_up": ""
+            },
+            "report_status": "error"
+        }
+
+
+def _parse_structured_report(report_text: str) -> Dict[str, Any]:
+    """
+    Parse LLM response into structured report.
+
+    Attempts JSON parsing first, falls back to section extraction.
+    """
+    import json
+    import re
+
+    # Try to extract JSON from the response
+    json_match = re.search(r'\{[\s\S]*\}', report_text)
+    if json_match:
+        try:
+            report = json.loads(json_match.group())
+            # Ensure all required fields exist
+            required_fields = ["summary", "key_findings", "recommendations", "follow_up"]
+            for field in required_fields:
+                if field not in report:
+                    report[field] = "Not specified"
+            if "full_report" not in report:
+                report["full_report"] = report_text
+            return report
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse JSON from report, falling back to section extraction")
+
+    # Fall back to section extraction
+    return {
+        "summary": _extract_section(report_text, "Summary"),
+        "key_findings": _extract_section(report_text, "Key Findings"),
+        "recommendations": _extract_section(report_text, "Recommendations"),
+        "follow_up": _extract_section(report_text, "Follow-up"),
+        "full_report": report_text
+    }
 
 
 def _extract_section(text: str, section_name: str) -> str:

@@ -24,6 +24,7 @@ class PatientBase(BaseModel):
 
 class PatientCreate(PatientBase):
     """Schema for creating a new patient"""
+    medical_history_text: Optional[str] = Field(None, description="Free text medical history input")
     medical_history: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     allergies: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     medications: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
@@ -127,6 +128,65 @@ class MessageResponse(MessageBase):
 
     class Config:
         from_attributes = True
+
+
+# ============================================
+# Medical Report Schemas
+# ============================================
+
+class ReportBase(BaseModel):
+    """Base medical report model"""
+    patient_id: str = Field(..., description="Associated patient ID")
+    conversation_id: str = Field(..., description="Associated conversation ID")
+    report_type: str = Field(default="hypertension_diagnosis", description="Type of diagnosis")
+
+
+class ReportCreate(ReportBase):
+    """Schema for creating a new medical report"""
+    summary: Optional[str] = Field(None, description="Brief overview of patient's condition")
+    key_findings: Optional[str] = Field(None, description="Important clinical observations")
+    recommendations: Optional[str] = Field(None, description="Treatment recommendations")
+    follow_up: Optional[str] = Field(None, description="Follow-up schedule")
+    full_report: Optional[str] = Field(None, description="Complete report text")
+
+
+class ReportUpdate(BaseModel):
+    """Schema for updating a medical report (all fields optional)"""
+    report_type: Optional[str] = None
+    summary: Optional[str] = None
+    key_findings: Optional[str] = None
+    recommendations: Optional[str] = None
+    follow_up: Optional[str] = None
+    full_report: Optional[str] = None
+
+
+class ReportApproval(BaseModel):
+    """Schema for approving/rejecting a medical report"""
+    approved: bool = Field(..., description="Whether the report is approved")
+    notes: Optional[str] = Field(None, description="Approval notes or rejection reason")
+
+
+class ReportResponse(ReportBase):
+    """Schema for medical report response"""
+    report_id: str
+    status: str = Field(description="Report status: pending, approved, rejected")
+    summary: Optional[str] = None
+    key_findings: Optional[str] = None
+    recommendations: Optional[str] = None
+    follow_up: Optional[str] = None
+    full_report: Optional[str] = None
+    created_at: datetime
+    approved_at: Optional[datetime] = None
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ReportListResponse(BaseModel):
+    """Schema for list of reports"""
+    reports: List[ReportResponse]
+    total: int
 
 
 # ============================================

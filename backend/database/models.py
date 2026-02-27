@@ -118,6 +118,10 @@ class Conversation(Base):
     # Stores EntityGraph serialization for MainAgent conversations
     entity_graph_state = Column(JSON, nullable=True)
 
+    # Report Status
+    # Tracks the status of the diagnostic report for this conversation
+    report_status = Column(String(20), default="none")  # none, generated, pending_approval, approved, rejected
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
@@ -206,13 +210,71 @@ class Message(Base):
         return f"<Message(id={self.id}, role={self.role}, turn={self.turn_number})>"
 
 
+class MedicalReport(Base):
+    """
+    Medical report table - stores diagnostic reports generated from each consultation.
+
+    A patient can have multiple reports from different consultations over time.
+    This allows tracking of patient history and provides context for future consultations.
+    """
+    __tablename__ = "medical_reports"
+
+    # Primary Key
+    report_id = Column(String(36), primary_key=True, default=generate_uuid)
+
+    # Foreign Keys
+    patient_id = Column(String(36), ForeignKey("patients.patient_id"), nullable=False)
+    conversation_id = Column(String(36), ForeignKey("conversations.conversation_id"), nullable=False)
+
+    # Report Content
+    report_type = Column(String(50), default="hypertension_diagnosis")  # Type of diagnosis
+    status = Column(String(20), default="pending")  # pending, approved, rejected
+
+    # Structured Report Data
+    summary = Column(Text)  # Brief overview of the patient's condition
+    key_findings = Column(Text)  # Important clinical observations
+    recommendations = Column(Text)  # Treatment and lifestyle recommendations
+    follow_up = Column(Text)  # Follow-up schedule
+    full_report = Column(Text)  # Complete report text
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    approved_at = Column(DateTime, nullable=True)  # When approved by doctor
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+    # Relationships
+    patient = relationship("Patient", backref="medical_reports")
+    conversation = relationship("Conversation", backref="medical_report", uselist=False)
+
+    def to_dict(self):
+        """Convert model to dictionary"""
+        return {
+            "report_id": self.report_id,
+            "patient_id": self.patient_id,
+            "conversation_id": self.conversation_id,
+            "report_type": self.report_type,
+            "status": self.status,
+            "summary": self.summary,
+            "key_findings": self.key_findings,
+            "recommendations": self.recommendations,
+            "follow_up": self.follow_up,
+            "full_report": self.full_report,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "approved_at": self.approved_at.isoformat() if self.approved_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }
+
+    def __repr__(self):
+        return f"<MedicalReport(id={self.report_id}, status={self.status})>"
+
+
 # ============================================
 # Utility Functions for Models
 # ============================================
 
 def get_all_models():
     """Get all model classes"""
-    return [Patient, Conversation, Message]
+    return [Patient, Conversation, Message, MedicalReport]
 
 
 def get_model_by_tablename(tablename: str):
@@ -220,7 +282,8 @@ def get_model_by_tablename(tablename: str):
     models_map = {
         "patients": Patient,
         "conversations": Conversation,
-        "messages": Message
+        "messages": Message,
+        "medical_reports": MedicalReport
     }
     return models_map.get(tablename)
 

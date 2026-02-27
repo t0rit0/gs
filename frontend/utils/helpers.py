@@ -116,6 +116,9 @@ def reset_current_conversation():
     st.session_state.image_analysis_report = None
     st.session_state.thumbnail_visible = False
     st.session_state.last_processed_image = None
+    # Reset report approval states
+    st.session_state.pending_report = None
+    st.session_state.pending_operations = None
 
 
 def load_conversation(conversation_id: str, messages: list[dict], patient_info: dict):
@@ -148,6 +151,13 @@ def patient_create_form() -> dict[str, Any] | None:
             phone = st.text_input("电话 / Phone", placeholder="联系电话", key="new_patient_phone")
             address = st.text_input("地址 / Address", placeholder="家庭地址", key="new_patient_address")
 
+        medical_history_text = st.text_area(
+            "病历 / Medical History",
+            placeholder="请输入患者既往病史（可选）",
+            height=100,
+            key="new_patient_medical_history"
+        )
+
         submitted = st.form_submit_button("创建患者 / Create Patient", type="primary")
 
         if submitted and name:
@@ -158,7 +168,8 @@ def patient_create_form() -> dict[str, Any] | None:
                 "age": age,
                 "gender": gender_map[gender],
                 "phone": phone or None,
-                "address": address or None
+                "address": address or None,
+                "medical_history_text": medical_history_text or None
             }
         elif submitted and not name:
             st.warning("请输入患者姓名 / Please enter patient name")
@@ -323,3 +334,210 @@ def display_analysis_report(report: dict | None):
     if isinstance(report, dict):
         with st.expander("📄 原始数据 / Raw Data", expanded=False):
             st.json(report)
+
+
+def display_report_approval_ui(report: dict, conversation_id: str, patient_id: str):
+    """
+    Display the report approval interface after report is generated.
+
+    Shows:
+    - Report content (editable fields)
+    - Approve/Reject buttons
+    - Notes input for doctor's comments
+
+    Args:
+        report: Report dictionary with summary, key_findings, etc.
+        conversation_id: Current conversation ID
+        patient_id: Current patient ID
+    """
+    st.markdown("---")
+    st.markdown("### 📋 诊断报告 / Diagnostic Report")
+    st.info("请审核以下报告内容，批准后将保存为病历记录。/ Please review and approve to save as medical record.")
+    st.markdown("---")
+
+    # Display report sections in editable form
+    with st.form("report_approval_form"):
+        # Editable report fields
+        summary = st.text_area(
+            "摘要 / Summary",
+            value=report.get("summary", ""),
+            height=80,
+            help="Brief overview of the patient's condition"
+        )
+        key_findings = st.text_area(
+            "主要发现 / Key Findings",
+            value=report.get("key_findings", ""),
+            height=100,
+            help="Important clinical observations"
+        )
+        recommendations = st.text_area(
+            "建议 / Recommendations",
+            value=report.get("recommendations", ""),
+            height=100,
+            help="Treatment and lifestyle recommendations"
+        )
+        follow_up = st.text_area(
+            "随访计划 / Follow-up",
+            value=report.get("follow_up", ""),
+            height=60,
+            help="Recommended follow-up schedule"
+        )
+
+        # Notes for approval/rejection
+        notes = st.text_area(
+            "批注 / Notes",
+            placeholder="添加您的批注（可选）/ Add your notes (optional)...",
+            height=60
+        )
+
+        st.markdown("---")
+
+        # Action buttons
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            approve_btn = st.form_submit_button(
+                "✅ 批准保存 / Approve",
+                type="primary",
+                use_container_width=True
+            )
+
+        with col2:
+            reject_btn = st.form_submit_button(
+                "❌ 拒绝 / Reject",
+                type="secondary",
+                use_container_width=True
+            )
+
+        with col3:
+            modify_btn = st.form_submit_button(
+                "✏️ 修改后批准 / Modify & Approve",
+                type="secondary",
+                use_container_width=True
+            )
+
+    # Handle button actions
+    client = st.session_state.backend_client
+
+    if approve_btn:
+        try:
+            # First create the report, then approve it
+            report_data = {
+                "summary": report.get("summary", ""),
+                "key_findings": report.get("key_findings", ""),
+                "recommendations": report.get("recommendations", ""),
+                "follow_up": report.get("follow_up", ""),
+                "full_report": report.get("full_report", "")
+            }
+
+            # Create report
+            client.create_report(conversation_id, patient_id, report_data)
+
+            # Approve report
+            result = client.approve_report(conversation_id, approved=True, notes=notes if notes.strip() else None)
+
+            st.success("✅ 报告已批准并保存 / Report approved and saved")
+            st.session_state.pending_report = None
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"批准失败 / Approval failed: {str(e)}")
+
+    elif reject_btn:
+        try:
+            # Create report first (will be in rejected status)
+            report_data = {
+                "summary": report.get("summary", ""),
+                "key_findings": report.get("key_findings", ""),
+                "recommendations": report.get("recommendations", ""),
+                "follow_up": report.get("follow_up", ""),
+                "full_report": report.get("full_report", "")
+            }
+            client.create_report(conversation_id, patient_id, report_data)
+
+            # Reject report
+            result = client.approve_report(conversation_id, approved=False, notes=notes if notes.strip() else None)
+
+            st.warning("⚠️ 报告已拒绝 / Report rejected")
+            st.session_state.pending_report = None
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"拒绝失败 / Rejection failed: {str(e)}")
+
+    elif modify_btn:
+        try:
+            # Create report with modified content, then approve
+            updated_report = {
+                "summary": summary,
+                "key_findings": key_findings,
+                "recommendations": recommendations,
+                "follow_up": follow_up,
+                "full_report": report.get("full_report", "")
+            }
+
+            # Create report
+            client.create_report(conversation_id, patient_id, updated_report)
+
+            # Approve report
+            result = client.approve_report(conversation_id, approved=True, notes=notes if notes.strip() else None)
+
+            st.success("✅ 报告已修改并批准 / Report modified and approved")
+            st.session_state.pending_report = None
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"修改批准失败 / Modification failed: {str(e)}")
+
+
+def display_pending_operations_ui(pending_operations: list, conversation_id: str):
+    """
+    Display pending database operations for approval
+
+    Args:
+        pending_operations: List of pending operations
+        conversation_id: Current conversation ID
+    """
+    st.markdown("---")
+    st.markdown("### 💾 待批准的数据库操作 / Pending Database Operations")
+    st.warning("以下数据库操作需要您的批准才能执行。/ The following database operations require your approval.")
+
+    # Display operations
+    for i, op in enumerate(pending_operations, 1):
+        with st.expander(f"操作 {i} / Operation {i}", expanded=True):
+            st.json(op)
+
+    # Action buttons
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button(
+            "✅ 批准所有 / Approve All",
+            type="primary",
+            use_container_width=True,
+            key="approve_ops_btn"
+        ):
+            try:
+                client = st.session_state.backend_client
+                result = client.approve_operations(conversation_id, confirm=True)
+                st.success(f"✅ 已执行 {result.get('executed_count', 0)} 个操作 / Executed {result.get('executed_count', 0)} operations")
+                st.session_state.pending_operations = None
+                st.rerun()
+            except Exception as e:
+                st.error(f"批准失败 / Approval failed: {str(e)}")
+
+    with col2:
+        if st.button(
+            "❌ 拒绝所有 / Reject All",
+            type="secondary",
+            use_container_width=True,
+            key="reject_ops_btn"
+        ):
+            try:
+                client = st.session_state.backend_client
+                result = client.approve_operations(conversation_id, confirm=False)
+                st.info("已取消所有待批准操作 / All pending operations cancelled")
+                st.session_state.pending_operations = None
+                st.rerun()
+            except Exception as e:
+                st.error(f"取消失败 / Cancellation failed: {str(e)}")

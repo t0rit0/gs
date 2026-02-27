@@ -10,11 +10,12 @@ from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import desc
 import json
 
-from backend.database.models import Patient, Conversation, Message
+from backend.database.models import Patient, Conversation, Message, MedicalReport
 from backend.database.schemas import (
     PatientCreate, PatientUpdate,
     ConversationCreate, ConversationUpdate,
-    MessageCreate
+    MessageCreate,
+    ReportCreate, ReportUpdate, ReportApproval
 )
 from datetime import datetime
 
@@ -40,6 +41,19 @@ class PatientCRUD:
         """
         # Convert Pydantic model to dict
         patient_dict = patient_data.model_dump()
+
+        # Handle medical_history_text: convert to medical_history record
+        medical_history_text = patient_dict.pop("medical_history_text", None)
+        if medical_history_text and medical_history_text.strip():
+            medical_record = {
+                "condition": medical_history_text.strip(),
+                "diagnosis_date": datetime.now().isoformat(),
+                "status": "active",
+                "notes": None
+            }
+            # Prepend to existing medical_history if any
+            existing_history = patient_dict.get("medical_history") or []
+            patient_dict["medical_history"] = [medical_record] + existing_history
 
         # Create Patient instance
         db_patient = Patient(**patient_dict)
@@ -627,6 +641,200 @@ class MessageCRUD:
 
 
 # ============================================
+# Medical Report CRUD
+# ============================================
+
+class ReportCRUD:
+    """CRUD operations for MedicalReport model"""
+
+    @staticmethod
+    def create(db: Session, report_data: ReportCreate) -> MedicalReport:
+        """
+        Create a new medical report
+
+        Args:
+            db: Database session
+            report_data: Report creation data
+
+        Returns:
+            Created MedicalReport object
+        """
+        report_dict = report_data.model_dump()
+        db_report = MedicalReport(**report_dict)
+
+        db.add(db_report)
+        db.commit()
+        db.refresh(db_report)
+
+        return db_report
+
+    @staticmethod
+    def get(db: Session, report_id: str) -> Optional[MedicalReport]:
+        """
+        Get a report by ID
+
+        Args:
+            db: Database session
+            report_id: Report UUID
+
+        Returns:
+            MedicalReport object or None
+        """
+        return db.query(MedicalReport).filter(
+            MedicalReport.report_id == report_id
+        ).first()
+
+    @staticmethod
+    def get_by_conversation(db: Session, conversation_id: str) -> Optional[MedicalReport]:
+        """
+        Get report by conversation ID
+
+        Args:
+            db: Database session
+            conversation_id: Conversation UUID
+
+        Returns:
+            MedicalReport object or None
+        """
+        return db.query(MedicalReport).filter(
+            MedicalReport.conversation_id == conversation_id
+        ).first()
+
+    @staticmethod
+    def list_by_patient(
+        db: Session,
+        patient_id: str,
+        skip: int = 0,
+        limit: int = 100
+    ) -> Tuple[List[MedicalReport], int]:
+        """
+        Get all reports for a patient
+
+        Args:
+            db: Database session
+            patient_id: Patient UUID
+            skip: Number of records to skip
+            limit: Maximum number of records
+
+        Returns:
+            Tuple of (report list, total count)
+        """
+        query = db.query(MedicalReport).filter(
+            MedicalReport.patient_id == patient_id
+        )
+
+        total = query.count()
+        reports = query.order_by(
+            desc(MedicalReport.created_at)
+        ).offset(skip).limit(limit).all()
+
+        return reports, total
+
+    @staticmethod
+    def get_approved_by_patient(db: Session, patient_id: str, limit: int = 10) -> List[MedicalReport]:
+        """
+        Get approved reports for a patient
+
+        Args:
+            db: Database session
+            patient_id: Patient UUID
+            limit: Maximum number of records
+
+        Returns:
+            List of approved MedicalReport objects
+        """
+        return db.query(MedicalReport).filter(
+            MedicalReport.patient_id == patient_id,
+            MedicalReport.status == "approved"
+        ).order_by(desc(MedicalReport.created_at)).limit(limit).all()
+
+    @staticmethod
+    def approve(
+        db: Session,
+        report_id: str,
+        approval: ReportApproval
+    ) -> Optional[MedicalReport]:
+        """
+        Approve or reject a report
+
+        Args:
+            db: Database session
+            report_id: Report UUID
+            approval: Approval data with approved flag and notes
+
+        Returns:
+            Updated MedicalReport object or None
+        """
+        report = ReportCRUD.get(db, report_id)
+        if not report:
+            return None
+
+        if approval.approved:
+            report.status = "approved"
+            report.approved_at = datetime.now()
+        else:
+            report.status = "rejected"
+
+        report.updated_at = datetime.now()
+        db.commit()
+        db.refresh(report)
+
+        return report
+
+    @staticmethod
+    def update(
+        db: Session,
+        report_id: str,
+        update_data: ReportUpdate
+    ) -> Optional[MedicalReport]:
+        """
+        Update report content
+
+        Args:
+            db: Database session
+            report_id: Report UUID
+            update_data: Fields to update
+
+        Returns:
+            Updated MedicalReport object or None
+        """
+        report = ReportCRUD.get(db, report_id)
+        if not report:
+            return None
+
+        update_dict = update_data.model_dump(exclude_unset=True)
+        for field, value in update_dict.items():
+            setattr(report, field, value)
+
+        report.updated_at = datetime.now()
+        db.commit()
+        db.refresh(report)
+
+        return report
+
+    @staticmethod
+    def delete(db: Session, report_id: str) -> bool:
+        """
+        Delete a report
+
+        Args:
+            db: Database session
+            report_id: Report UUID
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        report = ReportCRUD.get(db, report_id)
+        if not report:
+            return False
+
+        db.delete(report)
+        db.commit()
+
+        return True
+
+
+# ============================================
 # Export CRUD instances
 # ============================================
 
@@ -634,3 +842,4 @@ class MessageCRUD:
 patient_crud = PatientCRUD()
 conversation_crud = ConversationCRUD()
 message_crud = MessageCRUD()
+report_crud = ReportCRUD()

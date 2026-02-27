@@ -20,6 +20,8 @@ from frontend.utils.helpers import (
     reset_current_conversation,
     load_conversation,
     format_timestamp,
+    display_report_approval_ui,
+    display_pending_operations_ui,
 )
 
 
@@ -375,6 +377,21 @@ def display_chat_interface(patient_info: dict):
     for msg in st.session_state.messages:
         display_message(msg["role"], msg["content"], msg.get("timestamp"))
 
+    # Check for pending report that needs approval
+    if st.session_state.get("pending_report"):
+        display_report_approval_ui(
+            st.session_state.pending_report,
+            st.session_state.current_conversation_id,
+            st.session_state.current_patient_id
+        )
+
+    # Check for pending operations after conversation end
+    if st.session_state.get("pending_operations"):
+        display_pending_operations_ui(
+            st.session_state.pending_operations,
+            st.session_state.current_conversation_id
+        )
+
     st.markdown("---")
 
     # Input section with image upload
@@ -453,6 +470,7 @@ def display_chat_interface(patient_info: dict):
                 ai_response = result.get("ai_message", "抱歉，我现在无法回复。")
                 accomplish = result.get("accomplish", False)
                 analysis_report = result.get("analysis_report")
+                report = result.get("report")  # Get report if generated
 
                 # Add AI response
                 st.session_state.messages.append({
@@ -477,6 +495,14 @@ def display_chat_interface(patient_info: dict):
                 if accomplish:
                     st.success("✅ 诊断完成 / Diagnosis Completed")
 
+                    # Store pending report for approval
+                    if report:
+                        st.session_state.pending_report = report
+                        st.session_state.messages.append({
+                            "role": "system",
+                            "content": "📋 诊断报告已生成，请审核后批准保存。/ Report generated, please review and approve."
+                        })
+
                 st.rerun()
 
             except Exception as e:
@@ -498,8 +524,16 @@ def display_chat_interface(patient_info: dict):
         if st.button("📊 结束问诊 / End Consultation", use_container_width=True):
             try:
                 client = st.session_state.backend_client
-                client.end_conversation(st.session_state.current_conversation_id)
-                st.success("✅ 问诊已结束 / Consultation ended")
+                result = client.end_conversation(st.session_state.current_conversation_id)
+
+                # Check for pending operations
+                pending_ops = result.get("pending_operations", [])
+                if pending_ops:
+                    st.session_state.pending_operations = pending_ops
+                    st.info(f"💾 有 {len(pending_ops)} 个数据库操作待批准 / {len(pending_ops)} database operations pending approval")
+                else:
+                    st.success("✅ 问诊已结束 / Consultation ended")
+
                 st.rerun()
             except Exception as e:
                 st.error(f"结束失败 / End failed: {str(e)}")
