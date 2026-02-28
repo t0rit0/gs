@@ -238,18 +238,56 @@ class EntityGraphManager:
         Returns:
             Dict with serialized state
         """
-        # Convert NetworkX graphs to node-link format
-        entity_graph_data = nx.node_link_data(entity_graph.entity_graph)
-        relation_graph_data = nx.node_link_data(entity_graph.relation_graph)
+        from datetime import datetime
+
+        # Helper function to convert datetime objects to ISO strings
+        def make_json_serializable(obj):
+            """Recursively convert datetime objects to ISO format strings."""
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            elif isinstance(obj, dict):
+                return {k: make_json_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [make_json_serializable(item) for item in obj]
+            return obj
+
+        # Convert NetworkX graphs to node-link format with datetime serialization
+        entity_graph_raw = nx.node_link_data(entity_graph.entity_graph)
+        relation_graph_raw = nx.node_link_data(entity_graph.relation_graph)
+
+        # Convert datetime objects in nodes
+        entity_graph_data = {
+            "nodes": [make_json_serializable(dict(node)) for node in entity_graph_raw.get("nodes", [])],
+            "links": [make_json_serializable(dict(link)) for link in entity_graph_raw.get("links", [])],
+            "directed": entity_graph_raw.get("directed", True),
+            "multigraph": entity_graph_raw.get("multigraph", False),
+            "graph": entity_graph_raw.get("graph", {})
+        }
+        relation_graph_data = {
+            "nodes": [make_json_serializable(dict(node)) for node in relation_graph_raw.get("nodes", [])],
+            "links": [make_json_serializable(dict(link)) for link in relation_graph_raw.get("links", [])],
+            "directed": relation_graph_raw.get("directed", True),
+            "multigraph": relation_graph_raw.get("multigraph", False),
+            "graph": relation_graph_raw.get("graph", {})
+        }
 
         return {
             "entity_graph": entity_graph_data,
             "relation_graph": relation_graph_data,
+            # Basic state
             "step": entity_graph.step,
             "accomplish": entity_graph.accomplish,
             "prev_node": entity_graph.prev_node,
             "target": entity_graph.target,
-            "language": entity_graph.language
+            "language": entity_graph.language,
+            # Graph parameters - critical for consistent behavior after restart
+            "node_hit_threshold": entity_graph.node_hit_threshold,
+            "confidential_threshold": entity_graph.confidential_threshold,
+            "relevance_threshold": entity_graph.relevance_threshold,
+            "weight_threshold": entity_graph.weight_threshold,
+            "alpha": entity_graph.alpha,
+            "beta": entity_graph.beta,
+            "gamma": entity_graph.gamma,
         }
 
     def _deserialize_entity_graph(
@@ -269,6 +307,8 @@ class EntityGraphManager:
         Returns:
             Restored EntityGraph instance
         """
+        from datetime import datetime
+
         # Load DrHyper models
         drhyper_config = DrHyperConfig()
 
@@ -290,24 +330,103 @@ class EntityGraphManager:
             max_tokens=drhyper_config.graph_llm.max_tokens
         )
 
-        # Create EntityGraph instance
+        # Build params dict with only non-None values from state_dict
+        graph_params = {}
+        param_keys = [
+            "node_hit_threshold", "confidential_threshold", "relevance_threshold",
+            "weight_threshold", "alpha", "beta", "gamma"
+        ]
+        for key in param_keys:
+            if key in state_dict and state_dict[key] is not None:
+                graph_params[key] = state_dict[key]
+
+        # Create EntityGraph instance with serialized parameters
         entity_graph = EntityGraph(
-            target=target,
+            target=state_dict.get("target", target),
             graph_model=graph_model,
-            conv_model=conv_model
+            conv_model=conv_model,
+            **graph_params  # Pass only non-None parameters
         )
 
+        # Helper function to convert ISO strings back to datetime objects
+        def parse_datetime_strings(obj):
+            """Recursively convert ISO datetime strings to datetime objects."""
+            if isinstance(obj, dict):
+                result = {}
+                for k, v in obj.items():
+                    # Check for common datetime field names
+                    if k in ('extracted_at', 'last_updated_at') and isinstance(v, str):
+                        try:
+                            result[k] = datetime.fromisoformat(v)
+                        except (ValueError, TypeError):
+                            result[k] = v
+                    else:
+                        result[k] = parse_datetime_strings(v)
+                return result
+            elif isinstance(obj, (list, tuple)):
+                return [parse_datetime_strings(item) for item in obj]
+            return obj
+
         # Restore graph structures
-        entity_graph.entity_graph = nx.node_link_graph(state_dict["entity_graph"])
-        entity_graph.relation_graph = nx.node_link_graph(state_dict["relation_graph"])
+        entity_graph_data = parse_datetime_strings(state_dict["entity_graph"])
+        relation_graph_data = parse_datetime_strings(state_dict["relation_graph"])
+
+        entity_graph.entity_graph = nx.node_link_graph(entity_graph_data, edges="links")
+        entity_graph.relation_graph = nx.node_link_graph(relation_graph_data, edges="links")
+
+        # Restore basic state
         entity_graph.step = state_dict.get("step", 0)
         entity_graph.accomplish = state_dict.get("accomplish", False)
         entity_graph.prev_node = state_dict.get("prev_node")
         entity_graph.language = state_dict.get("language", "English")
 
-        logger.info(f"EntityGraph deserialized from database state")
+        # Recalculate temporal decay for all nodes
+        self._recalculate_temporal_decay(entity_graph)
+
+        logger.info(f"EntityGraph deserialized from database state with {entity_graph.entity_graph.number_of_nodes()} nodes")
 
         return entity_graph
+
+    def _recalculate_temporal_decay(self, entity_graph: EntityGraph) -> None:
+        """
+        Recalculate temporal decay for all nodes after deserialization.
+
+        This ensures that freshness and temporal_confidence are up-to-date
+        based on the current time, not the time of serialization.
+
+        Args:
+            entity_graph: EntityGraph instance to update
+        """
+        updated_count = 0
+        for node_id in entity_graph.entity_graph.nodes():
+            node_data = entity_graph.entity_graph.nodes[node_id]
+            extracted_at = node_data.get("extracted_at")
+            original_conf = node_data.get("original_confidential_level", 0.5)
+
+            if extracted_at:
+                # Recalculate temporal decay
+                updated_attrs = entity_graph.temporal_calculator.update_node_attributes(
+                    extracted_at=extracted_at,
+                    original_confidential_level=original_conf
+                )
+                # Update only temporal-related attributes
+                for key in ["temporal_confidence", "uncertainty", "freshness"]:
+                    if key in updated_attrs:
+                        node_data[key] = updated_attrs[key]
+
+                # Update status based on new temporal_confidence
+                temporal_conf = updated_attrs.get("temporal_confidence", node_data.get("temporal_confidence", 0.5))
+                if temporal_conf >= 0.7:
+                    node_data["status"] = 2
+                elif temporal_conf >= 0.4:
+                    node_data["status"] = 1
+                else:
+                    node_data["status"] = 0
+
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Recalculated temporal decay for {updated_count} nodes")
 
 
 # Singleton instance
