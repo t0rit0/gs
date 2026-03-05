@@ -301,8 +301,11 @@ class ConversationCRUD:
         Returns:
             Created Conversation object
         """
-        # Convert Pydantic model to dict
-        conv_dict = conv_data.model_dump()
+        # Convert Pydantic model to dict if needed
+        if isinstance(conv_data, dict):
+            conv_dict = conv_data
+        else:
+            conv_dict = conv_data.model_dump()
 
         # Create Conversation instance with default DrHyper state
         db_conv = Conversation(**conv_dict)
@@ -419,7 +422,11 @@ class ConversationCRUD:
         if not db_conv:
             return None
 
-        update_dict = update_data.model_dump(exclude_unset=True)
+        # Handle both dict and Pydantic model inputs
+        if isinstance(update_data, dict):
+            update_dict = update_data
+        else:
+            update_dict = update_data.model_dump(exclude_unset=True)
         for field, value in update_dict.items():
             setattr(db_conv, field, value)
 

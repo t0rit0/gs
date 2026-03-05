@@ -379,7 +379,7 @@ def display_report_approval_ui(report: dict, conversation_id: str, patient_id: s
         follow_up = st.text_area(
             "随访计划 / Follow-up",
             value=report.get("follow_up", ""),
-            height=60,
+            height=68,
             help="Recommended follow-up schedule"
         )
 
@@ -387,7 +387,7 @@ def display_report_approval_ui(report: dict, conversation_id: str, patient_id: s
         notes = st.text_area(
             "批注 / Notes",
             placeholder="添加您的批注（可选）/ Add your notes (optional)...",
-            height=60
+            height=68
         )
 
         st.markdown("---")

@@ -71,7 +71,7 @@ class ConversationBase(BaseModel):
     """Base conversation model"""
     patient_id: str = Field(..., description="Associated patient ID")
     target: str = Field(..., min_length=1, max_length=200, description="Conversation goal")
-    model_type: str = Field(default="DrHyper", pattern="^(DrHyper|General)$", description="AI model type")
+    model_type: str = Field(default="DrHyper", pattern="^(DrHyper|General|MainAgent)$", description="AI model type")
 
 
 class ConversationCreate(ConversationBase):

@@ -43,8 +43,8 @@ async def get_question_tool_node(state: MainAgentState) -> Dict[str, Any]:
     """
     Execute get_next_diagnostic_question tool
 
-    Note: Uses EntityGraph's hint directly without translation, as EntityGraph
-    already provides structured, conversation-ready guidance.
+    Gets the structured hint from EntityGraph and returns it for the agent
+    to convert into a natural conversational question.
     """
     result = await tools.get_next_diagnostic_question_node(state)
 
@@ -53,12 +53,12 @@ async def get_question_tool_node(state: MainAgentState) -> Dict[str, Any]:
         result["_route"] = "generate_report_tool"
         return result
 
-    # Use hint directly from EntityGraph (no translation needed)
+    # Store hint in state, but don't generate message yet
+    # Let agent convert hint to natural conversation
     hint = result.get("last_hint", "Could you tell me more about your condition?")
     result["hint_message"] = hint
-    result["query_message"] = hint  # Use hint as query (EntityGraph already structures it conversationally)
-    result["messages"] = [AIMessage(content=hint)]
-    result["_route"] = "agent"  # Show question to user, wait for response
+    # Don't set query_message or messages here - agent will generate them
+    result["_route"] = "agent"
     return result
 
 

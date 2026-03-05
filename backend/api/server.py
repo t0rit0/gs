@@ -271,7 +271,7 @@ async def chat(
         logger.error(f"Value error in chat: {e}")
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to process chat: {e}")
+        logger.exception(f"Failed to process chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -505,15 +505,15 @@ async def create_agent_conversation(
 
         # Create database record
         from backend.database.crud import conversation_crud
-        from datetime import datetime
+        import datetime
 
         db_conv = conversation_crud.create(db, {
-            "id": conversation_id,
+            "conversation_id": conversation_id,
             "patient_id": request.patient_id,
             "target": request.target,
             "model_type": "MainAgent",
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "created_at": datetime.datetime.now(datetime.UTC),
+            "updated_at": datetime.datetime.now(datetime.UTC)
         })
 
         logger.info(f"Created MainAgent conversation: {conversation_id}")

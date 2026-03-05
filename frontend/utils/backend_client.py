@@ -246,3 +246,62 @@ class BackendClient:
         """
         payload = {"confirm": confirm}
         return self._request("POST", f"/api/conversations/{conversation_id}/approve-operations", json=payload)
+
+    # ============================================
+    # MainAgent (LangGraph-based) Endpoints
+    # ============================================
+
+    def create_agent_conversation(
+        self,
+        patient_id: str,
+        target: str = "Hypertension diagnosis"
+    ) -> dict[str, Any]:
+        """
+        Create conversation using MainAgent (LangGraph-based)
+
+        Args:
+            patient_id: Patient ID
+            target: Conversation goal/diagnosis target
+
+        Returns:
+            Conversation response with conversation_id and first_message
+        """
+        payload = {"patient_id": patient_id, "target": target}
+        return self._request("POST", "/api/conversations/agent", json=payload)
+
+    def agent_chat(
+        self,
+        conversation_id: str,
+        message: str
+    ) -> dict[str, Any]:
+        """
+        Send message to MainAgent
+
+        Args:
+            conversation_id: Conversation ID
+            message: User message
+
+        Returns:
+            Chat response with ai_message, accomplish, report fields
+        """
+        payload = {"message": message}
+        return self._request(
+            "POST",
+            f"/api/conversations/{conversation_id}/agent-chat",
+            json=payload
+        )
+
+    def agent_end_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """
+        End MainAgent conversation and get pending operations
+
+        Args:
+            conversation_id: Conversation ID
+
+        Returns:
+            Result with pending_operations field
+        """
+        return self._request(
+            "POST",
+            f"/api/conversations/{conversation_id}/agent-end"
+        )

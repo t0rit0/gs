@@ -131,14 +131,39 @@ Use the available tools to:
 - Be empathetic and professional in all interactions
 """
 
+    async def _generate_conversational_question(self, hint: str) -> str:
+        """
+        Convert EntityGraph's structured hint into a natural conversational question.
+
+        The hint contains structured guidance like [QUERY ENTITY], [EXAMPLE QUERY], etc.
+        We need to extract the key question and make it friendly and conversational.
+        """
+        prompt = f"""You are a friendly medical assistant. Convert the following structured guidance into a natural, conversational question for the patient.
+
+Guidance:
+{hint}
+
+Requirements:
+1. Extract the key question to ask (look for [QUERY ENTITY] or [EXAMPLE QUERY])
+2. Make it conversational and friendly - speak naturally, not like a form
+3. Keep it brief - one question at a time
+4. Do not include any technical labels, brackets, or formatting
+5. If there's example language, you may adapt it but make it sound natural
+6. Respond in Chinese if the guidance contains Chinese, otherwise respond in the same language as the guidance
+
+Your question:"""
+
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        return response.content.strip()
+
     async def _agent_node(self, state: MainAgentState) -> Dict[str, Any]:
         """
         Agent node that:
         1. Checks if conversation should end (report generated)
-        2. Checks if returning from a tool (show response to user)
-        3. Analyzes user intent
-        4. Routes to appropriate tool node
-        5. Generates conversational responses
+        2. Checks if hint needs conversion to conversational question
+        3. Checks if returning from a tool (show response to user)
+        4. Analyzes user intent
+        5. Routes to appropriate tool node
         """
         from langchain_core.messages import AIMessage
 
@@ -149,6 +174,23 @@ Use the available tools to:
             # The report message is already in the messages list from generate_report_tool
             logger.info("Report generated, ending conversation")
             return {"_route": END}
+
+        # Check if we have a hint that needs to be converted to a conversational question
+        hint = state.get("hint_message", "")
+        query_msg = state.get("query_message", "")
+        human_msg = state.get("human_message", "")
+
+        # If we have a hint but no query_message, we need to generate conversational question
+        if hint and not query_msg:
+            # Generate conversational question from hint
+            conversational_question = await self._generate_conversational_question(hint)
+            logger.info(f"Generated conversational question from hint")
+            return {
+                "messages": [AIMessage(content=conversational_question)],
+                "query_message": conversational_question,
+                "hint_message": hint,  # Keep hint for update_graph_tool
+                "_route": END
+            }
 
         messages_list = state.get("messages", [])
 

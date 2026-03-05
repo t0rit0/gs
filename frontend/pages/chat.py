@@ -294,11 +294,11 @@ def chat_page():
         if not st.session_state.current_conversation_id:
             patient = st.session_state.selected_patient
 
-            # Create new conversation
+            # Create new conversation using MainAgent
             client = st.session_state.backend_client
             try:
                 with st.spinner("正在初始化问诊会话 / Initializing consultation..."):
-                    result = client.create_conversation(
+                    result = client.create_agent_conversation(
                         patient_id=patient['patient_id'],
                         target="Hypertension diagnosis"
                     )
@@ -308,7 +308,7 @@ def chat_page():
                     st.session_state.current_patient_info = patient
 
                     # Add welcome message
-                    welcome_msg = result.get('ai_message', f"您好，{patient['name']}。我是 Dr.Hyper，您的高血压专科AI助手。")
+                    welcome_msg = result.get('first_message', f"您好，{patient['name']}。我是 Dr.Hyper，您的高血压专科AI助手。")
                     st.session_state.messages.append({
                         "role": "ai",
                         "content": welcome_msg
@@ -454,17 +454,19 @@ def display_chat_interface(patient_info: dict):
             "content": message_content
         })
 
-        # Get AI response
-        spinner_text = "正在分析医学影像... / Analyzing medical image..." if base64_image else "AI 正在思考... / AI is thinking..."
+        # Get AI response using MainAgent
+        spinner_text = "AI 正在思考... / AI is thinking..."
         with st.spinner(spinner_text):
             try:
                 client = st.session_state.backend_client
 
-                images = [base64_image] if base64_image else None
-                result = client.chat(
+                # MainAgent doesn't support images yet - show warning if image was uploaded
+                if base64_image:
+                    st.warning("⚠️ MainAgent 暂不支持图片分析，图片将被忽略 / MainAgent doesn't support image analysis yet, image will be ignored")
+
+                result = client.agent_chat(
                     conversation_id=st.session_state.current_conversation_id,
-                    message=message_content,
-                    images=images
+                    message=message_content
                 )
 
                 ai_response = result.get("ai_message", "抱歉，我现在无法回复。")
@@ -524,7 +526,7 @@ def display_chat_interface(patient_info: dict):
         if st.button("📊 结束问诊 / End Consultation", use_container_width=True):
             try:
                 client = st.session_state.backend_client
-                result = client.end_conversation(st.session_state.current_conversation_id)
+                result = client.agent_end_conversation(st.session_state.current_conversation_id)
 
                 # Check for pending operations
                 pending_ops = result.get("pending_operations", [])

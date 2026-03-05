@@ -18,6 +18,7 @@ from backend.database.crud import conversation_crud
 from drhyper.core.graph import EntityGraph
 from drhyper.utils.llm_loader import load_chat_model
 from drhyper.config.settings import ConfigManager as DrHyperConfig
+from backend.config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -200,11 +201,15 @@ class EntityGraphManager:
             max_tokens=drhyper_config.graph_llm.max_tokens
         )
 
-        # Create EntityGraph
+        # Create EntityGraph with max_nodes parameter
+        config = get_config()
+        max_nodes = config.get("main_agent.max_nodes", None)
+
         entity_graph = EntityGraph(
             target=target,
             graph_model=graph_model,
-            conv_model=conv_model
+            conv_model=conv_model,
+            max_nodes=max_nodes
         )
 
         # Load patient context
@@ -224,7 +229,8 @@ class EntityGraphManager:
         # Initialize EntityGraph with patient context
         entity_graph.init(save=False, patient_context=patient_context_dict)
 
-        logger.info(f"EntityGraph created and initialized for: {conversation_id}")
+        node_count = entity_graph.entity_graph.number_of_nodes()
+        logger.info(f"EntityGraph created and initialized for: {conversation_id} with {node_count} nodes")
 
         return entity_graph
 
