@@ -241,7 +241,8 @@ class DataManagerCodeAgent:
         self.model = OpenAIModel(
             model_id=self.config.get_model(),
             api_key=self.config.get_api_key(),
-            api_base=self.config.get_base_url()
+            api_base=self.config.get_base_url(),
+            extra_body={"enable_thinking": False}
         )
 
         # Get custom instructions (ORM documentation)
@@ -253,7 +254,8 @@ class DataManagerCodeAgent:
             tools=[query_database],
             model=self.model,
             verbosity_level=LogLevel.DEBUG,
-            instructions=custom_instructions
+            instructions=custom_instructions,
+            max_steps=5 
         )
 
         logger.info(
