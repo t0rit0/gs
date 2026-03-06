@@ -8,6 +8,7 @@ Uses LangGraph StateGraph with checkpointer for multi-user state management.
 import logging
 from typing import Optional, Dict, Any, Tuple
 import uuid
+import time
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
@@ -17,8 +18,9 @@ from backend.agents.main_agent.graph import MainAgentState
 from backend.agents.main_agent import tools
 from backend.config.config_manager import get_config
 from backend.services.checkpointer_factory import get_checkpointer
+from drhyper.utils.logging import get_logger, conversation_context, log_event
 
-logger = logging.getLogger(__name__)
+logger = get_logger("MainAgent")
 
 
 class MainAgent:
@@ -53,12 +55,18 @@ Return ONLY the intent name."""
         Args:
             config_path: Optional path to config file
         """
+        logger.info("=" * 60)
+        logger.info("Initializing MainAgent")
+        logger.info("=" * 60)
+        
         # Load configuration
         self.config = get_config(config_path)
+        logger.debug(f"Configuration loaded: provider={self.config.get_provider()}, model={self.config.get_model()}")
 
         # Initialize LLM
         model_name = self.config.get("main_agent.model", self.config.get_model())
         temperature = self.config.get("main_agent.temperature", 0.7)
+        logger.info(f"Initializing LLM: model={model_name}, temperature={temperature}")
 
         self.llm = ChatOpenAI(
             model=model_name,
@@ -67,22 +75,28 @@ Return ONLY the intent name."""
             temperature=temperature
         )
 
-        logger.info(f"MainAgent initialized with model: {model_name}")
+        logger.info(f"MainAgent LLM initialized: {model_name}")
 
         # Create checkpointer for state persistence
+        logger.debug("Initializing checkpointer for state persistence")
         self.checkpointer = get_checkpointer(self.config)
 
         # Reference EntityGraphManager singleton for EntityGraph management
         from backend.services.entity_graph_manager import entity_graph_manager
         self.entity_graph_manager = entity_graph_manager
+        logger.debug("EntityGraphManager reference acquired")
 
         # Load system prompt
+        logger.debug("Loading system prompt")
         self.system_prompt = self._load_system_prompt()
 
         # Build the LangGraph
+        logger.info("Building LangGraph workflow")
+        start_time = time.time()
         self.graph = self._build_graph()
-
-        logger.info("MainAgent graph compiled successfully")
+        build_time = time.time() - start_time
+        logger.info(f"LangGraph compiled successfully in {build_time:.2f}s")
+        logger.info("=" * 60)
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file"""
@@ -92,13 +106,15 @@ Return ONLY the intent name."""
 
             if prompt_path.exists():
                 with open(prompt_path, "r", encoding="utf-8") as f:
-                    return f.read()
+                    prompt_content = f.read()
+                logger.debug(f"System prompt loaded from {prompt_path} ({len(prompt_content)} chars)")
+                return prompt_content
             else:
                 logger.warning(f"System prompt file not found: {prompt_path}, using default")
                 return self._default_system_prompt()
 
         except Exception as e:
-            logger.error(f"Error loading system prompt: {e}, using default")
+            logger.error(f"Error loading system prompt: {e}, using default", exc_info=True)
             return self._default_system_prompt()
 
     def _default_system_prompt(self) -> str:
@@ -138,6 +154,9 @@ Use the available tools to:
         The hint contains structured guidance like [QUERY ENTITY], [EXAMPLE QUERY], etc.
         We need to extract the key question and make it friendly and conversational.
         """
+        logger.debug(f"Generating conversational question from hint: {hint[:100]}...")
+        start_time = time.time()
+        
         prompt = f"""You are a friendly medical assistant. Convert the following structured guidance into a natural, conversational question for the patient.
 
 Guidance:
@@ -154,7 +173,10 @@ Requirements:
 Your question:"""
 
         response = await self.llm.ainvoke([HumanMessage(content=prompt)])
-        return response.content.strip()
+        elapsed = time.time() - start_time
+        result = response.content.strip()
+        logger.debug(f"Conversational question generated in {elapsed:.2f}s: {result[:80]}...")
+        return result
 
     async def _agent_node(self, state: MainAgentState) -> Dict[str, Any]:
         """
@@ -166,13 +188,19 @@ Your question:"""
         5. Routes to appropriate tool node
         """
         from langchain_core.messages import AIMessage
+        
+        conversation_id = state.get("conversation_id", "unknown")
+        logger.debug(f"[conv:{conversation_id[:8]}] Agent node processing")
+        start_time = time.time()
 
         # Check if report was generated - if so, END the conversation
         # This happens after generate_report_tool routes back to agent
         if state.get("accomplish", False) and state.get("report"):
             # Report generated, show it to user and end conversation
             # The report message is already in the messages list from generate_report_tool
-            logger.info("Report generated, ending conversation")
+            logger.info(f"[conv:{conversation_id[:8]}] Report generated, ending conversation")
+            log_event(logger, "CONVERSATION_END", "Report generated, conversation ending", 
+                     extra_data={"conversation_id": conversation_id})
             return {"_route": END}
 
         # Check if we have a hint that needs to be converted to a conversational question
@@ -184,7 +212,7 @@ Your question:"""
         if hint and not query_msg:
             # Generate conversational question from hint
             conversational_question = await self._generate_conversational_question(hint)
-            logger.info(f"Generated conversational question from hint")
+            logger.info(f"[conv:{conversation_id[:8]}] Generated conversational question from hint")
             return {
                 "messages": [AIMessage(content=conversational_question)],
                 "query_message": conversational_question,
@@ -208,7 +236,7 @@ Your question:"""
 
             if not has_new_human_input:
                 # Last message is AI from a tool, no new human input after it - show to user
-                logger.info("Returning from tool, ending to show response to user")
+                logger.debug(f"[conv:{conversation_id[:8]}] Returning from tool, ending to show response to user")
                 return {"_route": END}
 
         messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
@@ -225,23 +253,31 @@ Your question:"""
             if len(state.get("messages", [])) == 0:
                 # Initial start - route to get_question_tool to get first question
                 # Don't generate a message, let get_question_tool handle it
+                logger.debug(f"[conv:{conversation_id[:8]}] Initial start, routing to get_question_tool")
                 return {"_route": "get_question_tool"}
             else:
                 # We have messages but no human message - should END to show AI message
+                logger.debug(f"[conv:{conversation_id[:8]}] No user message, ending to show AI message")
                 return {"_route": END}
 
         # Analyze intent using LLM (reuse self.llm for consistency)
+        logger.debug(f"[conv:{conversation_id[:8]}] Analyzing user intent: {user_message[:50]}...")
+        intent_start = time.time()
         intent_response = await self.llm.ainvoke([
             SystemMessage(content=self.INTENT_ANALYSIS_PROMPT),
             HumanMessage(content=f"User message: {user_message}\nCurrent accomplish state: {state.get('accomplish', False)}")
         ])
+        intent_elapsed = time.time() - intent_start
 
         intent = intent_response.content.strip().lower()
-        logger.info(f"Detected intent: {intent}")
+        logger.info(f"[conv:{conversation_id[:8]}] Detected intent: {intent} (in {intent_elapsed:.2f}s)")
+        log_event(logger, "INTENT_DETECTED", f"Intent: {intent}", 
+                 extra_data={"conversation_id": conversation_id, "intent": intent, "latency_ms": intent_elapsed * 1000})
 
         # Route based on intent
         if intent == "database_query":
             # Store intent for routing, call data_manager tool
+            logger.debug(f"[conv:{conversation_id[:8]}] Routing to data_manager_tool")
             return {
                 "messages": [AIMessage(content="", tool_calls=[{
                     "name": "data_manager",
@@ -260,6 +296,7 @@ Your question:"""
             # 2. Volunteered health information (not responding to a question)
             # For volunteered info, get_question_tool will call EntityGraph which
             # can process it through its accept_message() or get_hint_message() methods
+            logger.debug(f"[conv:{conversation_id[:8]}] Routing to get_question_tool (intent={intent})")
             return {
                 "messages": [AIMessage(content="", tool_calls=[{
                     "name": "get_next_diagnostic_question",
@@ -347,9 +384,16 @@ Your question:"""
         Returns:
             First AI message to the user
         """
+        logger.info("=" * 60)
         logger.info(f"Starting conversation: {conversation_id} for patient: {patient_id}")
+        logger.info("=" * 60)
+        log_event(logger, "CONVERSATION_START", "New conversation started",
+                 extra_data={"conversation_id": conversation_id, "patient_id": patient_id, "target": target})
+        
+        start_time = time.time()
 
         # Get or create EntityGraph via manager (pre-loads into cache)
+        logger.debug(f"Creating EntityGraph for conversation {conversation_id[:8]}")
         entity_graph = self.entity_graph_manager.get_or_create(
             conversation_id=conversation_id,
             patient_id=patient_id,
@@ -372,12 +416,18 @@ Your question:"""
         }
 
         # Invoke graph to get first message
+        logger.debug("Invoking LangGraph for first message")
         result = await self.graph.ainvoke(initial_state, config)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"First message generated in {elapsed:.2f}s")
 
         # Extract first message
         if result.get("messages"):
             first_message = result["messages"][-1].content
-            logger.info(f"First message generated: {first_message[:100]}...")
+            logger.info(f"First message: {first_message[:100]}...")
+            log_event(logger, "FIRST_MESSAGE", f"First message: {first_message[:50]}...",
+                     extra_data={"conversation_id": conversation_id, "latency_ms": elapsed * 1000})
             return first_message
         else:
             logger.error("No messages returned from graph")
@@ -398,11 +448,15 @@ Your question:"""
         Returns:
             Tuple of (ai_message, accomplish, report)
         """
-        logger.info(f"Processing message for conversation: {conversation_id}")
-
+        logger.info(f"[conv:{conversation_id[:8]}] Processing user message: {user_message[:50]}...")
+        log_event(logger, "USER_MESSAGE_RECEIVED", f"User: {user_message[:50]}...",
+                 extra_data={"conversation_id": conversation_id})
+        
+        start_time = time.time()
         config = {"configurable": {"thread_id": conversation_id}}
 
         # Add user message to state AND set human_message for routing
+        logger.debug(f"Invoking LangGraph with user message")
         result = await self.graph.ainvoke(
             {
                 "messages": [HumanMessage(content=user_message)],
@@ -410,6 +464,8 @@ Your question:"""
             },
             config
         )
+        
+        elapsed = time.time() - start_time
 
         # Extract response
         if result.get("messages"):
@@ -420,7 +476,14 @@ Your question:"""
         accomplish = result.get("accomplish", False)
         report = result.get("report")
 
-        logger.info(f"Response generated, accomplish={accomplish}")
+        logger.info(f"[conv:{conversation_id[:8]}] Response generated in {elapsed:.2f}s, accomplish={accomplish}")
+        log_event(logger, "AI_RESPONSE", f"AI: {ai_message[:50]}...",
+                 extra_data={
+                     "conversation_id": conversation_id,
+                     "accomplish": accomplish,
+                     "has_report": report is not None,
+                     "latency_ms": elapsed * 1000
+                 })
 
         return ai_message, accomplish, report
 
@@ -507,22 +570,32 @@ Your question:"""
         Returns:
             Tuple of (final_message, has_pending_ops, pending_ops, report)
         """
-        logger.info(f"Ending conversation: {conversation_id}")
+        logger.info(f"[conv:{conversation_id[:8]}] Ending conversation")
+        log_event(logger, "CONVERSATION_END_REQUEST", "Conversation ending requested",
+                 extra_data={"conversation_id": conversation_id})
+        
+        start_time = time.time()
 
         # Invalidate EntityGraph from cache to free memory
+        logger.debug(f"Invalidating EntityGraph for conversation {conversation_id[:8]}")
         self.entity_graph_manager.invalidate(conversation_id)
 
         # Check for pending database operations
         pending_ops = self.get_pending_operations(conversation_id)
         has_pending = len(pending_ops) > 0
+        
+        if has_pending:
+            logger.info(f"[conv:{conversation_id[:8]}] Found {len(pending_ops)} pending operations")
 
         # Get final state to check for report
         config = {"configurable": {"thread_id": conversation_id}}
         try:
             state = self.graph.get_state(config)
             report = state.values.get("report")
+            if report:
+                logger.info(f"[conv:{conversation_id[:8]}] Report available in final state")
         except Exception as e:
-            logger.error(f"Error getting final state: {e}")
+            logger.error(f"Error getting final state: {e}", exc_info=True)
             report = None
 
         # Generate end message
@@ -532,6 +605,16 @@ Your question:"""
             final_message = self._format_report_message(report)
         else:
             final_message = "Conversation ended. Thank you."
+        
+        elapsed = time.time() - start_time
+        logger.info(f"[conv:{conversation_id[:8]}] Conversation ended in {elapsed:.2f}s")
+        log_event(logger, "CONVERSATION_ENDED", "Conversation fully ended",
+                 extra_data={
+                     "conversation_id": conversation_id,
+                     "has_pending_ops": has_pending,
+                     "has_report": report is not None,
+                     "latency_ms": elapsed * 1000
+                 })
 
         return final_message, has_pending, pending_ops if has_pending else None, report
 
