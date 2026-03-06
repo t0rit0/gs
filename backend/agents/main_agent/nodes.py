@@ -171,22 +171,8 @@ async def generate_report_tool_node(state: MainAgentState) -> Dict[str, Any]:
 
     report = result.get("report")
     if report:
-        summary = f"""
-# Diagnostic Report Complete
-
-## Summary
-{report.get('summary', 'Not available')}
-
-## Key Findings
-{report.get('key_findings', 'Not available')}
-
-## Recommendations
-{report.get('recommendations', 'Not available')}
-
-## Follow-up
-{report.get('follow_up', 'Not available')}
-"""
-        result["messages"] = [AIMessage(content=summary)]
+        # Report is now a markdown string, display directly
+        result["messages"] = [AIMessage(content=report)]
     else:
         result["messages"] = [AIMessage(content="I apologize, but I couldn't generate the report.")]
 

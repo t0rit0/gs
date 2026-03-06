@@ -438,7 +438,7 @@ class AgentChatResponse(BaseModel):
     """Agent chat response"""
     ai_message: str
     accomplish: bool = False
-    report: Optional[dict] = None
+    report: Optional[str] = None
     has_pending_operations: bool = False
 
 
@@ -447,7 +447,7 @@ class AgentEndConversationResponse(BaseModel):
     message: str
     has_pending_operations: bool = False
     pending_operations: Optional[List[dict]] = None
-    report: Optional[dict] = None
+    report: Optional[str] = None
 
 
 class ApproveOperationsRequest(BaseModel):

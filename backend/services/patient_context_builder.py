@@ -164,9 +164,14 @@ class PatientContextBuilder:
         """
         date_str = report.created_at.strftime("%Y-%m-%d") if report.created_at else "Unknown date"
 
-        text = f"""[Historical Consultation Record - {date_str}]
-Summary: {report.summary or 'Not specified'}
-Key Findings: {report.key_findings or 'Not specified'}
-Recommendations: {report.recommendations or 'Not specified'}
-Follow-up: {report.follow_up or 'Not specified'}"""
-        return text
+        # Prefer full_report if available (new format)
+        if report.full_report:
+            return f"[Historical Consultation Record - {date_str}]\n\n{report.full_report}"
+
+        # Fall back to structured fields (old format)
+#         text = f"""[Historical Consultation Record - {date_str}]
+# Summary: {report.summary or 'Not specified'}
+# Key Findings: {report.key_findings or 'Not specified'}
+# Recommendations: {report.recommendations or 'Not specified'}
+# Follow-up: {report.follow_up or 'Not specified'}"""
+#         return text

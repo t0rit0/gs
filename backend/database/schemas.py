@@ -142,16 +142,24 @@ class ReportBase(BaseModel):
 
 
 class ReportCreate(ReportBase):
-    """Schema for creating a new medical report"""
+    """Schema for creating a new medical report
+
+    Note: full_report is the primary field. Other fields (summary, key_findings, etc.)
+    are optional and maintained for backwards compatibility with older reports.
+    """
     summary: Optional[str] = Field(None, description="Brief overview of patient's condition")
     key_findings: Optional[str] = Field(None, description="Important clinical observations")
     recommendations: Optional[str] = Field(None, description="Treatment recommendations")
     follow_up: Optional[str] = Field(None, description="Follow-up schedule")
-    full_report: Optional[str] = Field(None, description="Complete report text")
+    full_report: Optional[str] = Field(None, description="Complete report text in markdown format (primary field)")
 
 
 class ReportUpdate(BaseModel):
-    """Schema for updating a medical report (all fields optional)"""
+    """Schema for updating a medical report (all fields optional)
+
+    Note: full_report is the primary field for new reports.
+    Other fields are maintained for backwards compatibility.
+    """
     report_type: Optional[str] = None
     summary: Optional[str] = None
     key_findings: Optional[str] = None
@@ -167,7 +175,12 @@ class ReportApproval(BaseModel):
 
 
 class ReportResponse(ReportBase):
-    """Schema for medical report response"""
+    """Schema for medical report response
+
+    Note: full_report is the primary field for new reports.
+    Other fields (summary, key_findings, etc.) may be empty for new reports
+    but are maintained for backwards compatibility with historical data.
+    """
     report_id: str
     status: str = Field(description="Report status: pending, approved, rejected")
     summary: Optional[str] = None

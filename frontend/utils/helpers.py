@@ -336,17 +336,17 @@ def display_analysis_report(report: dict | None):
             st.json(report)
 
 
-def display_report_approval_ui(report: dict, conversation_id: str, patient_id: str):
+def display_report_approval_ui(report: str, conversation_id: str, patient_id: str):
     """
     Display the report approval interface after report is generated.
 
     Shows:
-    - Report content (editable fields)
+    - Report content (single editable markdown text area)
     - Approve/Reject buttons
     - Notes input for doctor's comments
 
     Args:
-        report: Report dictionary with summary, key_findings, etc.
+        report: Report markdown string
         conversation_id: Current conversation ID
         patient_id: Current patient ID
     """
@@ -355,32 +355,14 @@ def display_report_approval_ui(report: dict, conversation_id: str, patient_id: s
     st.info("请审核以下报告内容，批准后将保存为病历记录。/ Please review and approve to save as medical record.")
     st.markdown("---")
 
-    # Display report sections in editable form
+    # Display report in editable form
     with st.form("report_approval_form"):
-        # Editable report fields
-        summary = st.text_area(
-            "摘要 / Summary",
-            value=report.get("summary", ""),
-            height=80,
-            help="Brief overview of the patient's condition"
-        )
-        key_findings = st.text_area(
-            "主要发现 / Key Findings",
-            value=report.get("key_findings", ""),
-            height=100,
-            help="Important clinical observations"
-        )
-        recommendations = st.text_area(
-            "建议 / Recommendations",
-            value=report.get("recommendations", ""),
-            height=100,
-            help="Treatment and lifestyle recommendations"
-        )
-        follow_up = st.text_area(
-            "随访计划 / Follow-up",
-            value=report.get("follow_up", ""),
-            height=68,
-            help="Recommended follow-up schedule"
+        # Single editable text area for the full report
+        edited_report = st.text_area(
+            "报告内容 / Report Content",
+            value=report,
+            height=400,
+            help="Edit the report content before approving"
         )
 
         # Notes for approval/rejection
@@ -421,13 +403,9 @@ def display_report_approval_ui(report: dict, conversation_id: str, patient_id: s
 
     if approve_btn:
         try:
-            # First create the report, then approve it
+            # Create report with the full markdown content
             report_data = {
-                "summary": report.get("summary", ""),
-                "key_findings": report.get("key_findings", ""),
-                "recommendations": report.get("recommendations", ""),
-                "follow_up": report.get("follow_up", ""),
-                "full_report": report.get("full_report", "")
+                "full_report": report
             }
 
             # Create report
@@ -447,11 +425,7 @@ def display_report_approval_ui(report: dict, conversation_id: str, patient_id: s
         try:
             # Create report first (will be in rejected status)
             report_data = {
-                "summary": report.get("summary", ""),
-                "key_findings": report.get("key_findings", ""),
-                "recommendations": report.get("recommendations", ""),
-                "follow_up": report.get("follow_up", ""),
-                "full_report": report.get("full_report", "")
+                "full_report": report
             }
             client.create_report(conversation_id, patient_id, report_data)
 
@@ -468,16 +442,12 @@ def display_report_approval_ui(report: dict, conversation_id: str, patient_id: s
     elif modify_btn:
         try:
             # Create report with modified content, then approve
-            updated_report = {
-                "summary": summary,
-                "key_findings": key_findings,
-                "recommendations": recommendations,
-                "follow_up": follow_up,
-                "full_report": report.get("full_report", "")
+            report_data = {
+                "full_report": edited_report
             }
 
             # Create report
-            client.create_report(conversation_id, patient_id, updated_report)
+            client.create_report(conversation_id, patient_id, report_data)
 
             # Approve report
             result = client.approve_report(conversation_id, approved=True, notes=notes if notes.strip() else None)

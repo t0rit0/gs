@@ -37,7 +37,7 @@ class MainAgentState(TypedDict, total=False):
     human_message: Optional[str]              # User's response (for routing check)
 
     # Report
-    report: Optional[Dict[str, Any]]          # Generated diagnostic report (when accomplish=True)
+    report: Optional[str]                   # Generated diagnostic report as markdown string (when accomplish=True)
 
     # Report Approval State
     report_status: Optional[str]              # Report status: "none", "generated", "pending_approval", "approved", "rejected"

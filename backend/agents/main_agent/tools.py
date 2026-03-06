@@ -263,9 +263,8 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
     Node function that generates the diagnostic report.
 
     Gets EntityGraph from EntityGraphManager using conversation_id.
-    Returns a structured report in JSON format for database storage.
+    Returns the report as a markdown string directly.
     """
-    import json
     from pathlib import Path
     from backend.services.entity_graph_manager import entity_graph_manager
 
@@ -277,7 +276,7 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
 
     if not entity_graph:
         logger.error("EntityGraph not available from manager")
-        return {"error": "Entity graph not available", "summary": "Unable to generate report"}
+        return {"error": "Entity graph not available", "report": "Unable to generate report: Entity graph not available"}
 
     try:
         # Serialize collected data from EntityGraph
@@ -294,20 +293,12 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
             # Fallback to inline prompt
             prompt = f"""You are a medical assistant generating a diagnostic report for hypertension assessment.
 
-Output your response as a valid JSON object with the following structure:
-{{
-    "summary": "Brief overview of the patient's condition",
-    "key_findings": "Important clinical observations",
-    "recommendations": "Treatment and lifestyle recommendations",
-    "follow_up": "Recommended follow-up schedule",
-    "risk_level": "low/medium/high",
-    "additional_notes": "Any other relevant information"
-}}
+Generate a comprehensive diagnostic report in Markdown format based on the following collected patient information:
 
-Based on the following collected patient information:
 {collected_data}
 
-Generate a comprehensive diagnostic report in JSON format."""
+Include sections for Summary, Key Findings, Recommendations, Follow-up Plan, and Risk Assessment.
+Be professional, clear, and actionable in your recommendations."""
 
         # Get LLM configuration
         config = get_config()
@@ -322,15 +313,9 @@ Generate a comprehensive diagnostic report in JSON format."""
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         report_text = response.content
 
-        # Try to parse as JSON
-        report = _parse_structured_report(report_text)
-
-        # Add report status
-        report["report_status"] = "generated"
-
         logger.info("Diagnostic report generated successfully")
         return {
-            "report": report,
+            "report": report_text,
             "report_status": "generated"
         }
 
@@ -338,65 +323,6 @@ Generate a comprehensive diagnostic report in JSON format."""
         logger.error(f"Error generating diagnostic report: {e}")
         return {
             "error": str(e),
-            "report": {
-                "summary": f"Error generating report: {str(e)}",
-                "key_findings": "",
-                "recommendations": "",
-                "follow_up": ""
-            },
+            "report": f"Error generating report: {str(e)}",
             "report_status": "error"
         }
-
-
-def _parse_structured_report(report_text: str) -> Dict[str, Any]:
-    """
-    Parse LLM response into structured report.
-
-    Attempts JSON parsing first, falls back to section extraction.
-    """
-    import json
-    import re
-
-    # Try to extract JSON from the response
-    json_match = re.search(r'\{[\s\S]*\}', report_text)
-    if json_match:
-        try:
-            report = json.loads(json_match.group())
-            # Ensure all required fields exist
-            required_fields = ["summary", "key_findings", "recommendations", "follow_up"]
-            for field in required_fields:
-                if field not in report:
-                    report[field] = "Not specified"
-            if "full_report" not in report:
-                report["full_report"] = report_text
-            return report
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse JSON from report, falling back to section extraction")
-
-    # Fall back to section extraction
-    return {
-        "summary": _extract_section(report_text, "Summary"),
-        "key_findings": _extract_section(report_text, "Key Findings"),
-        "recommendations": _extract_section(report_text, "Recommendations"),
-        "follow_up": _extract_section(report_text, "Follow-up"),
-        "full_report": report_text
-    }
-
-
-def _extract_section(text: str, section_name: str) -> str:
-    """Extract a section from the generated report text"""
-    lines = text.split("\n")
-    section_lines = []
-    in_section = False
-
-    for line in lines:
-        if section_name in line:
-            in_section = True
-            continue
-        if in_section:
-            if line.strip() and not line.startswith("#"):
-                section_lines.append(line)
-            elif line.startswith("#") and section_lines:
-                break
-
-    return "\n".join(section_lines).strip() if section_lines else "Not specified"
