@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from backend.database.base import get_db
 from backend.database.schemas import (
     PatientCreate, PatientResponse, PatientUpdate,
-    ConversationResponse,
+    ConversationResponse, ConversationUpdate,
     MessageResponse,
     ReportCreate, ReportResponse, ReportUpdate, ReportApproval
 )
@@ -45,6 +45,34 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+
+# ============================================
+# Startup Event - Auto Initialize Database
+# ============================================
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Initialize database on application startup
+    
+    This ensures all tables are created before handling any requests.
+    Prevents 'no such table' errors on first run.
+    """
+    from backend.database.base import get_database_info, init_database
+    
+    logger.info("=" * 60)
+    logger.info("Starting Medical Assistant Backend API")
+    logger.info("=" * 60)
+    
+    logger.info("Initializing database on startup...")
+    init_database()
+    
+    db_info = get_database_info()
+    logger.info(f"Database: {db_info['url']}")
+    logger.info(f"Tables: {', '.join(db_info['tables'])}")
+    logger.info("✅ Database initialized successfully")
+    logger.info("=" * 60)
 
 # CORS middleware
 app.add_middleware(
@@ -801,7 +829,7 @@ async def create_conversation_report(
     report = report_crud.create(db, report_data)
 
     # Update conversation report_status
-    conversation_crud.update(db, conversation_id, type('obj', (object,), {'report_status': 'generated'})())
+    conversation_crud.update(db, conversation_id, ConversationUpdate(report_status='generated'))
 
     logger.info(f"Created report {report.report_id} for conversation {conversation_id}")
 
@@ -848,7 +876,7 @@ async def approve_conversation_report(
 
     # Update conversation report_status
     new_status = "approved" if approval.approved else "rejected"
-    conversation_crud.update(db, conversation_id, type('obj', (object,), {'report_status': new_status})())
+    conversation_crud.update(db, conversation_id, ConversationUpdate(report_status=new_status))
 
     logger.info(f"Report {report.report_id} {new_status} for conversation {conversation_id}")
 

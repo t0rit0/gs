@@ -83,6 +83,7 @@ class ConversationUpdate(BaseModel):
     """Schema for updating conversation (all fields optional)"""
     target: Optional[str] = Field(None, min_length=1, max_length=200)
     status: Optional[str] = Field(None, pattern="^(active|completed|abandoned)$")
+    report_status: Optional[str] = Field(None, pattern="^(none|generated|pending_approval|approved|rejected)$")
     drhyper_state: Optional[Dict[str, Any]] = None
 
 
