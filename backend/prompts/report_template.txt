@@ -18,6 +18,10 @@ Generate a well-formatted Markdown report with the following sections:
 - [Risk factors identified]
 - [Relevant medical history]
 
+## 关键诊断发现 / Key Diagnostic Findings
+
+[Reference the Key Diagnostic Findings below and explain their clinical significance]
+
 ## 诊断建议 / Recommendations
 
 ### 生活方式建议 / Lifestyle Modifications
@@ -46,8 +50,17 @@ Generate a well-formatted Markdown report with the following sections:
 
 {collected_data}
 
+## Key Diagnostic Findings
+
+{key_nodes_info}
+
 ## Instructions
 
-Based on the collected patient information above, generate a comprehensive diagnostic report in Markdown format.
-Be professional, clear, and actionable in your recommendations.
-Write in both Chinese and English where appropriate for a bilingual medical report.
+Based on the collected patient information AND the Key Diagnostic Findings above, generate a comprehensive diagnostic report in Markdown format.
+
+Requirements:
+1. Explicitly reference the Key Diagnostic Findings in your analysis
+2. Explain how each key finding supports the diagnosis
+3. Use the key findings as the foundation for your recommendations
+4. Be professional, clear, and actionable in your recommendations
+5. Write in both Chinese and English where appropriate for a bilingual medical report
