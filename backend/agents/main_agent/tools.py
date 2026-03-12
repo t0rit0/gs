@@ -341,18 +341,23 @@ async def generate_diagnostic_report_node(state: Dict[str, Any]) -> Dict[str, An
         # Serialize collected data from EntityGraph
         collected_data = entity_graph._serialize_nodes_with_value(entity_graph.entity_graph)
 
+        # Format key nodes for report generation
+        key_nodes_info = entity_graph._format_key_nodes_for_prompt(entity_graph.key_nodes)
+
         logger.info(f"[conv:{conversation_id[:8]}] Generating report with {len(collected_data)} characters of collected data")
+        logger.info(f"[conv:{conversation_id[:8]}] Including {len(entity_graph.key_nodes)} key diagnostic findings")
         log_event(logger, "REPORT_GENERATION_START", "Starting report generation",
                  extra_data={
                      "conversation_id": conversation_id,
-                     "collected_data_length": len(collected_data)
+                     "collected_data_length": len(collected_data),
+                     "key_nodes_count": len(entity_graph.key_nodes)
                  })
 
         # Load report template
         template_path = Path(__file__).parent.parent.parent / "prompts" / "report_template.txt"
         if template_path.exists():
             template = template_path.read_text()
-            prompt = template.format(collected_data=collected_data)
+            prompt = template.format(collected_data=collected_data, key_nodes_info=key_nodes_info)
             logger.debug(f"[conv:{conversation_id[:8]}] Using report template from {template_path}")
         else:
             # Fallback to inline prompt
@@ -362,7 +367,11 @@ Generate a comprehensive diagnostic report in Markdown format based on the follo
 
 {collected_data}
 
-Include sections for Summary, Key Findings, Recommendations, Follow-up Plan, and Risk Assessment.
+Key Diagnostic Findings:
+{key_nodes_info}
+
+Include sections for Summary, Key Findings, Key Diagnostic Findings analysis, Recommendations, Follow-up Plan, and Risk Assessment.
+Explicitly reference the Key Diagnostic Findings in your analysis.
 Be professional, clear, and actionable in your recommendations."""
             logger.debug(f"[conv:{conversation_id[:8]}] Using fallback inline report prompt")
 
@@ -379,7 +388,7 @@ Be professional, clear, and actionable in your recommendations."""
         logger.debug(f"[conv:{conversation_id[:8]}] Invoking LLM for report generation")
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         report_text = response.content
-        
+
         elapsed = time.time() - start_time
 
         logger.info(f"[conv:{conversation_id[:8]}] Diagnostic report generated successfully ({len(report_text)} chars, {elapsed:.2f}s)")
