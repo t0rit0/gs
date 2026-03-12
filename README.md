@@ -14,10 +14,12 @@ gs/
 │   │   ├── patients.py    # 患者管理
 │   │   └── settings.py    # 设置页面
 │   └── components/        # UI 组件
-├── drhyper/               # DrHyper 后端服务
-│   ├── deploy.py          # 后端服务启动脚本
-│   ├── cli.py             # 命令行工具
-│   └── config/            # 配置文件
+├── backend/               # 后端 API 服务
+│   ├── main.py            # 后端服务启动脚本
+│   ├── api/               # API 路由
+│   ├── services/          # 业务逻辑层
+│   └── database/          # 数据库模型和操作
+├── drhyper/               # DrHyper 核心依赖（对话和诊断引擎）
 ├── storage/               # 数据存储目录
 └── pyproject.toml         # Python 依赖配置
 ```
@@ -62,20 +64,17 @@ pip install -e .
 
 ### 4. 启动后端服务
 
-DrHyper 后端 API 服务提供医疗对话和诊断功能：
+后端 API 服务提供医疗对话和患者管理功能：
 
 ```bash
-# 进入 drhyper 目录
-cd drhyper
+# 方式一：使用 python 模块启动（推荐）
+python -m backend.main
 
-# 启动 API 服务（默认端口 8000）
-python deploy.py
+# 方式二：使用 uvicorn 直接启动
+uvicorn backend.api.server:app --reload --host 0.0.0.0 --port 8000
 
-# 开发模式（启用自动重载）
-python deploy.py --reload
-
-# 自定义 host 和 port
-python deploy.py --host 0.0.0.0 --port 8080 --reload
+# 自定义端口
+uvicorn backend.api.server:app --port 8080 --reload
 ```
 
 后端服务启动后，API 文档可通过以下地址访问：
@@ -83,10 +82,10 @@ python deploy.py --host 0.0.0.0 --port 8080 --reload
 - ReDoc: http://localhost:8000/redoc
 
 **主要 API 端点**
-- `POST /init_conversation` - 初始化对话会话
-- `POST /chat` - 发送消息（支持图片分析）
-- `POST /end_conversation` - 结束对话
-- `GET /list_conversations` - 列出所有对话
+- `POST /api/conversations` - 创建对话会话
+- `POST /api/conversations/{conversation_id}/messages` - 发送消息
+- `POST /api/patients` - 创建患者档案
+- `GET /api/patients` - 获取患者列表
 
 ### 5. 启动前端应用
 
@@ -155,12 +154,17 @@ ruff check --fix .
 
 ### 后端开发
 
-后端基于 FastAPI，位于 `drhyper/` 目录：
+后端基于 FastAPI，位于 `backend/` 目录：
 
-- `drhyper/api/server.py` - FastAPI 服务器
-- `drhyper/deploy.py` - 部署脚本
-- `drhyper/config/` - 配置管理
-- `drhyper/core/` - 核心业务逻辑
+- `backend/main.py` - 后端服务启动入口
+- `backend/api/server.py` - FastAPI 服务器
+- `backend/services/` - 业务逻辑层
+  - `conversation_service.py` - 对话服务
+  - `patient_service.py` - 患者管理服务
+- `backend/database/` - 数据库层
+  - `models.py` - 数据模型
+  - `crud.py` - 数据库操作
+  - `schemas.py` - Pydantic 模式
 
 ## 常见问题
 

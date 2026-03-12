@@ -24,6 +24,12 @@ dependencies = [
     "pillow==11.1.0",
     "scipy>=1.17.0",
     "smolagents>=1.24.0",
+    "langgraph>=1.0.1",
+    "langchain-openai>=0.3.28",
+    "langgraph-checkpoint-postgres>=3.0.4",
+    "asyncpg>=0.31.0",
+    "aiofiles>=25.1.0",
+    "nltk>=3.9.3",
 ]
 
 [dependency-groups]
