@@ -137,7 +137,7 @@ def patient_management_page():
 
                     with col4:
                         # Action buttons
-                        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
+                        btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns(5)
 
                         with btn_col1:
                             if st.button(
@@ -152,6 +152,17 @@ def patient_management_page():
 
                         with btn_col2:
                             if st.button(
+                                "📊",
+                                key=f"long_term_{patient['patient_id']}",
+                                help="长期管理 / Long-term Management",
+                                use_container_width=True
+                            ):
+                                st.session_state.selected_patient = patient
+                                st.session_state.current_page = "long_term"
+                                st.rerun()
+
+                        with btn_col3:
+                            if st.button(
                                 "👁️",
                                 key=f"view_{patient['patient_id']}",
                                 help="查看详情 / View Details",
@@ -160,7 +171,7 @@ def patient_management_page():
                                 st.session_state.viewing_patient = patient
                                 st.rerun()
 
-                        with btn_col3:
+                        with btn_col4:
                             if st.button(
                                 "✏️",
                                 key=f"edit_{patient['patient_id']}",
@@ -170,7 +181,7 @@ def patient_management_page():
                                 st.session_state.editing_patient = patient
                                 st.rerun()
 
-                        with btn_col4:
+                        with btn_col5:
                             if st.button(
                                 "🗑️",
                                 key=f"delete_{patient['patient_id']}",

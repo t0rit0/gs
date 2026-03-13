@@ -8,7 +8,7 @@ Compatible with:
 - PostgreSQL (production)
 - MySQL (if needed)
 """
-from sqlalchemy import Column, String, Integer, ForeignKey, Text, DateTime, JSON
+from sqlalchemy import Column, String, Integer, ForeignKey, Text, DateTime, JSON, Float
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -66,6 +66,13 @@ class Patient(Base):
         "Conversation",
         back_populates="patient",
         cascade="all, delete-orphan"  # Delete conversations when patient is deleted
+    )
+    
+    # Health metrics (Week 7 - Long-term Management)
+    metric_records = relationship(
+        "HealthMetricRecord",
+        back_populates="patient",
+        cascade="all, delete-orphan"
     )
 
     def to_dict(self):
@@ -374,3 +381,80 @@ Message.metadata example:
     }
 }
 """
+
+
+# ============================================
+# Health Metrics Models (Week 7 - Long-term Management)
+# ============================================
+
+class HealthMetricRecord(Base):
+    """
+    Long-term storage for patient health metrics
+    
+    Supports:
+    - Manual entry (patient/doctor)
+    - Clinical examination results
+    - Laboratory results
+    
+    Design Principles:
+    - Flexible schema for different metric types
+    - Temporal tracking (measured_at, created_at)
+    - Source attribution for data quality
+    """
+    __tablename__ = "health_metric_records"
+    
+    # Primary Key
+    record_id = Column(String(36), primary_key=True, default=generate_uuid)
+    patient_id = Column(String(36), ForeignKey("patients.patient_id"), nullable=False, index=True)
+    
+    # Metric Identification
+    metric_name = Column(String(100), nullable=False, index=True)
+    metric_category = Column(String(50))
+    
+    # Metric Value (flexible for different types)
+    value_numeric = Column(Float)
+    value_string = Column(String(200))
+    value_json = Column(JSON)
+    
+    # Components (for composite metrics like BP)
+    component_1_name = Column(String(50))
+    component_1_value = Column(Float)
+    component_2_name = Column(String(50))
+    component_2_value = Column(Float)
+    
+    # Units and Context
+    unit = Column(String(20))
+    source = Column(String(50))
+    context = Column(String(200))
+    
+    # Timestamps
+    measured_at = Column(DateTime, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    
+    # Relationships
+    patient = relationship("Patient", back_populates="metric_records")
+    
+    def to_dict(self):
+        """Convert to dictionary for API responses"""
+        return {
+            "record_id": self.record_id,
+            "patient_id": self.patient_id,
+            "metric_name": self.metric_name,
+            "metric_category": self.metric_category,
+            "value_numeric": self.value_numeric,
+            "value_string": self.value_string,
+            # Include component fields for composite metrics (e.g., Blood Pressure)
+            "component_1": {
+                "name": self.component_1_name,
+                "value": self.component_1_value
+            } if self.component_1_name else None,
+            "component_2": {
+                "name": self.component_2_name,
+                "value": self.component_2_value
+            } if self.component_2_name else None,
+            "unit": self.unit,
+            "source": self.source,
+            "context": self.context,
+            "measured_at": self.measured_at.isoformat() if self.measured_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }

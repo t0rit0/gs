@@ -97,6 +97,13 @@ def initialize_session_state():
     # Selected patient for viewing conversations (in sidebar)
     if 'selected_patient_for_conversations' not in st.session_state:
         st.session_state.selected_patient_for_conversations = None
+    
+    # Long-term management states
+    if 'show_manual_entry' not in st.session_state:
+        st.session_state.show_manual_entry = True
+    
+    if 'show_bulk_import' not in st.session_state:
+        st.session_state.show_bulk_import = False
 
     # Backend client
     if 'backend_client' not in st.session_state:

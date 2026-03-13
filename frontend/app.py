@@ -26,7 +26,7 @@ def setup_page_config():
 def top_navigation():
     """Create top navigation bar for page switching"""
     # Use st.columns to create a top navigation bar
-    col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 2, 1])
+    col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 2, 2, 2, 1])
 
     with col1:
         st.markdown(f"### {PAGE_ICON}")
@@ -50,6 +50,23 @@ def top_navigation():
             st.rerun()
 
     with col4:
+        # Long-term management (only enabled if patient selected)
+        patient = st.session_state.get('selected_patient') or st.session_state.get('viewing_patient')
+        disabled = patient is None
+        
+        if st.button(
+            "📊 长期管理 / Long-term",
+            use_container_width=True,
+            type="primary" if st.session_state.get('current_page') == 'long_term' else "secondary",
+            disabled=disabled
+        ):
+            st.session_state.current_page = 'long_term'
+            st.rerun()
+        
+        if disabled:
+            st.caption("💡 请先选择患者 / Select patient first")
+
+    with col5:
         if st.button(
             "⚙️ 系统设置 / Settings",
             use_container_width=True,
@@ -58,7 +75,7 @@ def top_navigation():
             st.session_state.current_page = 'settings'
             st.rerun()
 
-    with col5:
+    with col6:
         # Backend status indicator
         try:
             from frontend.utils.backend_client import BackendClient
@@ -168,6 +185,23 @@ def main():
     elif page == "patients":
         from frontend.pages.patients import patients_page
         patients_page()
+    elif page == "long_term":
+        from frontend.pages.long_term_management import long_term_management_page
+        # Get patient info
+        patient = st.session_state.get('selected_patient') or st.session_state.get('viewing_patient')
+        if patient:
+            from frontend.utils.backend_client import BackendClient
+            client = BackendClient()
+            api_base_url = client.base_url
+            long_term_management_page(
+                patient_id=patient['patient_id'],
+                patient_name=patient['name'],
+                api_base_url=api_base_url
+            )
+        else:
+            st.error("请先选择患者 / Please select a patient first")
+            st.session_state.current_page = "patients"
+            st.rerun()
     elif page == "settings":
         from frontend.pages.settings import settings_page
         settings_page()

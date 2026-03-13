@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from pydantic import BaseModel
+from datetime import datetime
 
 # Database related
 from backend.database.base import get_db
@@ -979,6 +980,157 @@ async def delete_report(
 
     logger.info(f"Deleted report {report_id}")
     return {"message": "Report deleted successfully"}
+
+
+# ============================================
+# Health Metrics Endpoints (Week 7 - Long-term Management)
+# ============================================
+
+from backend.api.schemas import MetricRecordCreate, MetricRecordResponse, MetricTrendResponse
+from backend.services.metric_crud import MetricCRUD
+from backend.services.trend_analysis_service import TrendAnalysisService
+
+
+@app.post("/api/patients/{patient_id}/metrics", response_model=MetricRecordResponse, status_code=201)
+def create_metric_record(
+    patient_id: str,
+    record: MetricRecordCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new health metric record
+    
+    - **patient_id**: Patient identifier
+    - **metric_name**: Name of metric (e.g., "Blood Pressure")
+    - **value**: Metric value (number or string like "145/92")
+    - **measured_at**: When measurement was taken
+    - **source**: Data source ("manual", "wearable", "clinical")
+    """
+    # Verify patient exists
+    from backend.database.crud import patient_crud
+    patient = patient_crud.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    try:
+        new_record = MetricCRUD.create_record(
+            db=db,
+            patient_id=patient_id,
+            metric_name=record.metric_name,
+            value=record.value,
+            measured_at=record.measured_at or datetime.now(),
+            unit=record.unit,
+            source=record.source,
+            context=record.context,
+            component_1_name=record.component_1_name,
+            component_1_value=record.component_1_value,
+            component_2_name=record.component_2_name,
+            component_2_value=record.component_2_value
+        )
+        return new_record
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/patients/{patient_id}/metrics", response_model=List[MetricRecordResponse])
+def get_metric_records(
+    patient_id: str,
+    metric_name: Optional[str] = Query(None, description="Filter by metric name"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get health metric records with filters
+    
+    - **patient_id**: Patient identifier
+    - **metric_name**: Optional filter by metric name
+    - **limit**: Maximum records (1-1000)
+    """
+    # Verify patient exists
+    from backend.database.crud import patient_crud
+    patient = patient_crud.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    records = MetricCRUD.get_records(
+        db=db,
+        patient_id=patient_id,
+        metric_name=metric_name,
+        limit=limit
+    )
+    
+    # Convert ORM models to dict to ensure component fields are included
+    return [record.to_dict() for record in records]
+
+
+@app.get("/api/patients/{patient_id}/metrics/latest/{metric_name}", response_model=MetricRecordResponse)
+def get_latest_metric(
+    patient_id: str,
+    metric_name: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get the most recent record for a specific metric
+    
+    - **patient_id**: Patient identifier
+    - **metric_name**: Name of metric to retrieve
+    """
+    # Verify patient exists
+    from backend.database.crud import patient_crud
+    patient = patient_crud.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    record = MetricCRUD.get_latest_record(
+        db=db,
+        patient_id=patient_id,
+        metric_name=metric_name
+    )
+    
+    if not record:
+        raise HTTPException(status_code=404, detail=f"No records found for {metric_name}")
+    
+    # Convert ORM model to dict to ensure component fields are included
+    return record.to_dict()
+
+
+@app.get("/api/patients/{patient_id}/metrics/trend/{metric_name}", response_model=MetricTrendResponse)
+def get_metric_trend(
+    patient_id: str,
+    metric_name: str,
+    days: int = Query(30, ge=1, le=365, description="Number of days to analyze"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get trend analysis for a specific metric
+    
+    - **patient_id**: Patient identifier
+    - **metric_name**: Name of metric to analyze
+    - **days**: Analysis window (1-365 days)
+    
+    Returns:
+    - **trend**: direction (increasing/decreasing/stable) and slope
+    - **statistics**: average, min, max, variability
+    - **status**: "insufficient_data" if not enough data points
+    """
+    # Verify patient exists
+    from backend.database.crud import patient_crud
+    patient = patient_crud.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    trend_service = TrendAnalysisService(db)
+    
+    analysis = trend_service.analyze_trend(
+        patient_id=patient_id,
+        metric_name=metric_name,
+        days=days
+    )
+    
+    if not analysis:
+        raise HTTPException(status_code=404, detail="No data available for trend analysis")
+    
+    return analysis
 
 
 # ============================================
