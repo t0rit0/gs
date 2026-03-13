@@ -291,7 +291,7 @@ def chat_page():
 
     # Initialize conversation if selected patient is set
     if hasattr(st.session_state, 'selected_patient') and st.session_state.selected_patient:
-        if not st.session_state.current_conversation_id:
+        if not st.session_state.get("current_conversation_id"):
             patient = st.session_state.selected_patient
 
             # Create new conversation using MainAgent
@@ -325,7 +325,7 @@ def chat_page():
     sidebar()
 
     # Main content area
-    if not st.session_state.current_conversation_id:
+    if not st.session_state.get("current_conversation_id"):
         st.info("👈 请从侧边栏选择患者以开始问诊 / Please select a patient from the sidebar to start consultation")
 
         # Display quick instructions
