@@ -8,9 +8,9 @@ Compatible with:
 - PostgreSQL (production)
 - MySQL (if needed)
 """
-from sqlalchemy import Column, String, Integer, ForeignKey, Text, DateTime, JSON, Float
+from sqlalchemy import Column, String, Integer, Float, ForeignKey, Text, DateTime, JSON, Date, Time, Index
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import uuid
 
 from backend.database.base import Base
@@ -71,6 +71,13 @@ class Patient(Base):
     # Health metrics (Week 7 - Long-term Management)
     metric_records = relationship(
         "HealthMetricRecord",
+        back_populates="patient",
+        cascade="all, delete-orphan"
+    )
+    
+    # Medication cards (Week 7+)
+    medication_cards = relationship(
+        "MedicationCard",
         back_populates="patient",
         cascade="all, delete-orphan"
     )
@@ -457,4 +464,205 @@ class HealthMetricRecord(Base):
             "context": self.context,
             "measured_at": self.measured_at.isoformat() if self.measured_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ============================================
+# Medication Management Models (Week 7+)
+# ============================================
+
+class MedicationCard(Base):
+    """
+    用药卡片/处方
+    
+    采用医疗行业标准 SIG 格式
+    """
+    __tablename__ = "medication_cards"
+    
+    # Primary Key
+    card_id = Column(String(36), primary_key=True, default=generate_uuid)
+    
+    # Patient and Doctor
+    patient_id = Column(String(36), ForeignKey("patients.patient_id"), nullable=False, index=True)
+    doctor_id = Column(String(36), ForeignKey("doctors.doctor_id"), nullable=True)
+    
+    # Drug Information
+    drug_name = Column(String(200), nullable=False)
+    generic_name = Column(String(200))
+    
+    # SIG - Medication Instructions
+    sig = Column(JSON, nullable=False)
+    # {"dose": 0.5, "dose_unit": "g", "route": "口服", "frequency": "一天三次", "duration_days": 5}
+    
+    # Dispense Information
+    dispense = Column(JSON, default=dict)
+    # {"total_quantity": 2, "quantity_unit": "盒"}
+    
+    # Instructions
+    instructions = Column(String(500))
+    
+    # Time Information
+    prescribed_date = Column(Date, nullable=False)
+    start_date = Column(Date)
+    end_date = Column(Date)
+    
+    # Status
+    status = Column(String(20), default="active")
+    # active, completed, discontinued, paused, pending
+    
+    # Source
+    source = Column(String(20), default="manual")
+    # manual, ai_recommended, ai_generated, patient_self_reported, csv_import
+    
+    # Relationships
+    conversation_id = Column(String(36), ForeignKey("conversations.conversation_id"))
+    report_id = Column(String(36), ForeignKey("medical_reports.report_id"))
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    # Relationships
+    patient = relationship("Patient", back_populates="medication_cards")
+    doctor = relationship("Doctor", back_populates="medication_cards")
+    schedules = relationship("MedicationSchedule", back_populates="card", cascade="all, delete-orphan")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_medication_cards_patient_status', 'patient_id', 'status'),
+        Index('idx_medication_cards_doctor', 'doctor_id'),
+    )
+    
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            "card_id": self.card_id,
+            "patient_id": self.patient_id,
+            "doctor_id": self.doctor_id,
+            "drug_name": self.drug_name,
+            "generic_name": self.generic_name,
+            "sig": self.sig,
+            "dispense": self.dispense,
+            "instructions": self.instructions,
+            "prescribed_date": self.prescribed_date.isoformat() if self.prescribed_date else None,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "status": self.status,
+            "source": self.source,
+            "conversation_id": self.conversation_id,
+            "report_id": self.report_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }
+    
+    def calculate_end_date(self):
+        """Calculate end date from prescribed_date and duration_days"""
+        if self.prescribed_date and self.sig.get("duration_days"):
+            return self.prescribed_date + timedelta(days=self.sig["duration_days"])
+        return None
+
+
+class MedicationSchedule(Base):
+    """
+    用药计划/记录表
+    
+    每天为每个 active 的 MedicationCard 生成计划
+    同时承担计划表和历史记录的角色
+    """
+    __tablename__ = "medication_schedules"
+    
+    # Primary Key
+    schedule_id = Column(String(36), primary_key=True, default=generate_uuid)
+    
+    # Foreign Keys
+    patient_id = Column(String(36), ForeignKey("patients.patient_id"), nullable=False)
+    card_id = Column(String(36), ForeignKey("medication_cards.card_id"), nullable=False)
+    
+    # Schedule Information
+    scheduled_date = Column(Date, nullable=False, index=True)
+    scheduled_time = Column(Time, nullable=False)
+    
+    # Inherited from Card (denormalized for easy querying)
+    dose = Column(Float)
+    dose_unit = Column(String(20))
+    route = Column(String(50))
+    
+    # Actual Intake Information
+    taken_at = Column(DateTime)
+    
+    # Status
+    status = Column(String(20), default="pending", index=True)
+    # pending, completed, missed, skipped
+    
+    # Notes
+    notes = Column(String(500))
+    
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.now)
+    
+    # Relationships
+    patient = relationship("Patient")
+    card = relationship("MedicationCard", back_populates="schedules")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_schedules_patient_date', 'patient_id', 'scheduled_date'),
+        Index('idx_schedules_status', 'status'),
+    )
+    
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            "schedule_id": self.schedule_id,
+            "patient_id": self.patient_id,
+            "card_id": self.card_id,
+            "scheduled_date": self.scheduled_date.isoformat() if self.scheduled_date else None,
+            "scheduled_time": self.scheduled_time.isoformat() if self.scheduled_time else None,
+            "dose": self.dose,
+            "dose_unit": self.dose_unit,
+            "route": self.route,
+            "taken_at": self.taken_at.isoformat() if self.taken_at else None,
+            "status": self.status,
+            "notes": self.notes,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class Doctor(Base):
+    """
+    Doctor information table
+    """
+    __tablename__ = "doctors"
+    
+    # Primary Key
+    doctor_id = Column(String(36), primary_key=True, default=generate_uuid)
+    
+    # Basic Information
+    name = Column(String(100), nullable=False)
+    title = Column(String(50))  # "主治医师", "主任医师"
+    department = Column(String(100))
+    phone = Column(String(20))
+    email = Column(String(100))
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+    
+    # Relationships
+    medication_cards = relationship(
+        "MedicationCard",
+        back_populates="doctor"
+    )
+    
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            "doctor_id": self.doctor_id,
+            "name": self.name,
+            "title": self.title,
+            "department": self.department,
+            "phone": self.phone,
+            "email": self.email,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }

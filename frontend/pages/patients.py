@@ -274,6 +274,19 @@ def patient_management_page():
 
         display_patient_info(patient)
 
+        # 用药管理标签页
+        st.markdown("---")
+        st.markdown("### 💊 健康管理 / Health Management")
+        
+        med_tab1, med_tab2 = st.tabs(["💊 用药管理", "📊 健康指标"])
+        
+        with med_tab1:
+            from frontend.components.medications import render_medications_tab
+            render_medications_tab(patient['patient_id'], client.base_url)
+        
+        with med_tab2:
+            st.info("健康指标功能开发中... / Health metrics coming soon...")
+
         # Show additional info
         col1, col2 = st.columns(2)
 

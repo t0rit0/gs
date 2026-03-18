@@ -1148,3 +1148,13 @@ if __name__ == "__main__":
         port=8000,
         log_level="info"
     )
+
+
+# ============================================
+# Medication Management Endpoints
+# ============================================
+
+from backend.api.medication_api import medication_router, schedule_router
+
+app.include_router(medication_router)
+app.include_router(schedule_router)
