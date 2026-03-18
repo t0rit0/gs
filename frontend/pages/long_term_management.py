@@ -23,16 +23,15 @@ from frontend.components.metrics import (
 def long_term_management_page(patient_id: str, patient_name: str, api_base_url: str):
     """
     Long-term patient management page
-    
+
     Features:
     - Health metrics entry
     - Metrics timeline visualization
     - Trend analysis
     """
-    # Clear selected_patient to avoid auto-creating conversation when switching pages
-    if hasattr(st.session_state, 'selected_patient'):
-        st.session_state.selected_patient = None
-    
+    # Note: Do NOT clear selected_patient/viewing_patient as they are needed
+    # to maintain patient context across page reruns (e.g., when selecting metrics)
+
     st.title(f"📊 长期健康管理 / Long-term Management")
     st.markdown(f"**患者 / Patient**: {patient_name} (ID: {patient_id})")
     st.markdown("---")
