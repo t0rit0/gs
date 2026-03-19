@@ -56,6 +56,7 @@ class Patient(Base):
     medications = Column(JSON, default=list)  # Current medications
     family_history = Column(JSON, default=list)  # Family medical history
     health_metrics = Column(JSON, default=list)  # Health metric records
+    symptoms = Column(JSON, default=list)  # Symptom records
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.now, nullable=False)
@@ -96,6 +97,7 @@ class Patient(Base):
             "medications": self.medications or [],
             "family_history": self.family_history or [],
             "health_metrics": self.health_metrics or [],
+            "symptoms": self.symptoms or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }

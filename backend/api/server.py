@@ -23,7 +23,8 @@ from backend.database.schemas import (
     PatientCreate, PatientResponse, PatientUpdate,
     ConversationResponse, ConversationUpdate,
     MessageResponse,
-    ReportCreate, ReportResponse, ReportUpdate, ReportApproval
+    ReportCreate, ReportResponse, ReportUpdate, ReportApproval,
+    SymptomRecordCreate, SymptomRecordResponse
 )
 
 # Service layer
@@ -1131,6 +1132,134 @@ def get_metric_trend(
         raise HTTPException(status_code=404, detail="No data available for trend analysis")
     
     return analysis
+
+
+# ============================================
+# Symptom Management Endpoints
+# ============================================
+
+@app.get("/api/patients/{patient_id}/symptoms", response_model=List[SymptomRecordResponse])
+async def get_patient_symptoms(
+    patient_id: str,
+    start_time: Optional[str] = Query(None, description="Start time (ISO format)"),
+    end_time: Optional[str] = Query(None, description="End time (ISO format)"),
+    status: Optional[str] = Query(None, description="Filter by status (active/resolved/chronic)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get patient symptom records
+
+    - **patient_id**: Patient identifier
+    - **start_time**: Filter by start time (ISO format, optional)
+    - **end_time**: Filter by end time (ISO format, optional)
+    - **status**: Filter by status (active/resolved/chronic, optional)
+
+    Returns:
+    - List of symptom records sorted by timestamp (newest first)
+    """
+    from datetime import datetime
+    from backend.database.crud import PatientCRUD
+
+    # Verify patient exists
+    patient = PatientCRUD.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    # Parse time parameters
+    start_dt = datetime.fromisoformat(start_time) if start_time else None
+    end_dt = datetime.fromisoformat(end_time) if end_time else None
+
+    symptoms = PatientCRUD.get_symptoms(
+        db, patient_id,
+        start_time=start_dt,
+        end_time=end_dt,
+        status=status
+    )
+
+    return symptoms
+
+
+@app.post("/api/patients/{patient_id}/symptoms", response_model=SymptomRecordResponse)
+async def add_patient_symptom(
+    patient_id: str,
+    symptom_data: SymptomRecordCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Add a symptom record to patient
+
+    - **patient_id**: Patient identifier
+    - **symptom**: Symptom name
+    - **description**: Symptom description (optional)
+    - **status**: Status (active/resolved/chronic), default: active
+    - **source**: Source (conversation/manual), default: manual
+
+    Returns:
+    - Created symptom record
+    """
+    from backend.database.crud import PatientCRUD
+
+    # Verify patient exists
+    patient = PatientCRUD.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    # Add symptom
+    updated_patient = PatientCRUD.add_symptom(
+        db,
+        patient_id=patient_id,
+        symptom=symptom_data.symptom,
+        description=symptom_data.description,
+        status=symptom_data.status,
+        source=symptom_data.source
+    )
+
+    # Return the newly added symptom
+    if not updated_patient or not updated_patient.symptoms:
+        raise HTTPException(status_code=500, detail="Failed to add symptom")
+
+    return updated_patient.symptoms[-1]
+
+
+@app.put("/api/patients/{patient_id}/symptoms/{symptom_name}/status")
+async def update_symptom_status(
+    patient_id: str,
+    symptom_name: str,
+    status_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Update status of a specific symptom
+
+    - **patient_id**: Patient identifier
+    - **symptom_name**: Symptom name to update
+    - **status**: New status (active/resolved/chronic)
+
+    Returns:
+    - Success message
+    """
+    from backend.database.crud import PatientCRUD
+
+    # Verify patient exists
+    patient = PatientCRUD.get(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    new_status = status_data.get("status")
+    if not new_status or new_status not in ["active", "resolved", "chronic"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid status. Must be one of: active, resolved, chronic"
+        )
+
+    updated_patient = PatientCRUD.update_symptom_status(
+        db, patient_id, symptom_name, new_status
+    )
+
+    if not updated_patient:
+        raise HTTPException(status_code=500, detail="Failed to update symptom status")
+
+    return {"message": f"Updated symptom '{symptom_name}' to '{new_status}'"}
 
 
 # ============================================

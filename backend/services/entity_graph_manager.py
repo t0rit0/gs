@@ -6,19 +6,22 @@ Features:
 - Database persistence for graph state
 - Thread-safe operations
 - Lazy loading and creation
+- Automatic symptom extraction from graph nodes
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from threading import Lock
+from datetime import datetime
 import networkx as nx
 
 from backend.database.base import SessionLocal
-from backend.database.crud import conversation_crud
+from backend.database.crud import conversation_crud, patient_crud
 from drhyper.core.graph import EntityGraph
 from drhyper.utils.llm_loader import load_chat_model
 from drhyper.config.settings import ConfigManager as DrHyperConfig
 from backend.config.config_manager import get_config
+from backend.services.symptom_extractor import SymptomExtractorFactory
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,8 @@ class EntityGraphManager:
         self.cache_size = cache_size
         self._cache: Dict[str, EntityGraph] = {}
         self._lock = Lock()
+        # Initialize symptom extractor
+        self.symptom_extractor = SymptomExtractorFactory.get_extractor("keyword")
         logger.info(f"EntityGraphManager initialized (cache_size={cache_size})")
 
     def get_or_create(
@@ -86,12 +91,13 @@ class EntityGraphManager:
                 logger.error(f"Error creating/loading EntityGraph: {e}")
                 return None
 
-    def save_state(self, conversation_id: str) -> bool:
+    def save_state(self, conversation_id: str, patient_id: str = None) -> bool:
         """
-        Save EntityGraph state to database
+        Save EntityGraph state to database and extract symptoms to Patient
 
         Args:
             conversation_id: Conversation identifier
+            patient_id: Patient identifier (optional, for symptom extraction)
 
         Returns:
             True if saved successfully
@@ -107,18 +113,91 @@ class EntityGraphManager:
                 # Serialize EntityGraph state to dict
                 state_dict = self._serialize_entity_graph(entity_graph)
 
+                # Extract symptoms from graph
+                symptoms = self._extract_symptoms_from_graph(state_dict)
+
                 # Save to database
                 with SessionLocal() as db:
+                    # 1. Update conversation's entity_graph_state
                     conversation_crud.update_entity_graph_state(
                         db, conversation_id, state_dict
                     )
 
-                logger.info(f"EntityGraph state saved to database: {conversation_id}")
+                    # 2. Update patient's symptoms if patient_id provided
+                    if patient_id and symptoms:
+                        self._update_patient_symptoms(db, patient_id, symptoms)
+                    elif patient_id:
+                        logger.debug(f"No symptoms to extract for conversation: {conversation_id}")
+
+                logger.info(f"EntityGraph state saved with {len(symptoms)} symptoms extracted")
                 return True
 
             except Exception as e:
                 logger.error(f"Error saving EntityGraph state: {e}")
                 return False
+
+    def _extract_symptoms_from_graph(self, state_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Extract symptoms from serialized graph state
+
+        Args:
+            state_dict: Serialized EntityGraph state
+
+        Returns:
+            List of symptom records
+        """
+        nodes = state_dict.get("entity_graph", {}).get("nodes", [])
+        return self.symptom_extractor.extract_symptoms(nodes)
+
+    def _update_patient_symptoms(
+        self,
+        db: SessionLocal,
+        patient_id: str,
+        new_symptoms: List[Dict[str, Any]]
+    ):
+        """
+        Update patient symptoms with newly extracted ones
+
+        Strategy:
+        - Merge new symptoms into existing list
+        - Avoid duplicates (same symptom + same timestamp)
+
+        Args:
+            db: Database session
+            patient_id: Patient identifier
+            new_symptoms: List of newly extracted symptom records
+        """
+        patient = patient_crud.get(db, patient_id)
+        if not patient:
+            logger.warning(f"Patient not found: {patient_id}")
+            return
+
+        existing_symptoms = patient.symptoms or []
+
+        # Create deduplication key set
+        existing_keys = {
+            (s.get("symptom"), s.get("timestamp"))
+            for s in existing_symptoms
+        }
+
+        # Add new symptoms (avoid duplicates)
+        for symptom in new_symptoms:
+            key = (symptom.get("symptom"), symptom.get("timestamp"))
+            if key not in existing_keys:
+                existing_symptoms.append(symptom)
+                existing_keys.add(key)
+
+        # Sort by timestamp descending
+        existing_symptoms.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        patient.symptoms = existing_symptoms
+        patient.updated_at = datetime.now()
+
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(patient, "symptoms")
+        db.commit()
+
+        logger.info(f"Updated patient {patient_id} with {len(new_symptoms)} symptoms")
 
     def invalidate(self, conversation_id: str) -> None:
         """

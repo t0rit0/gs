@@ -276,6 +276,35 @@ class MedicationRecord(BaseModel):
     notes: Optional[str] = None
 
 
+class SymptomRecordBase(BaseModel):
+    """Base schema for symptom records"""
+    symptom: str = Field(..., description="Symptom name")
+    description: Optional[str] = Field(None, description="Symptom description")
+    status: str = Field(default="active", pattern="^(active|resolved|chronic)$")
+    source: str = Field(default="manual", pattern="^(conversation|manual)$")
+
+
+class SymptomRecordCreate(SymptomRecordBase):
+    """Schema for creating a symptom record"""
+    pass
+
+
+class SymptomRecordResponse(SymptomRecordBase):
+    """Schema for symptom record response"""
+    timestamp: str = Field(..., description="Record timestamp")
+    
+    class Config:
+        from_attributes = True
+
+
+class SymptomQueryParams(BaseModel):
+    """Query parameters for symptom list"""
+    start_time: Optional[str] = Field(None, description="Start time (ISO format)")
+    end_time: Optional[str] = Field(None, description="End time (ISO format)")
+    status: Optional[str] = Field(None, pattern="^(active|resolved|chronic)$")
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
 # ============================================
 # Response Wrappers
 # ============================================

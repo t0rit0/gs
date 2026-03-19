@@ -261,6 +261,144 @@ class PatientCRUD:
         return patient
 
     @staticmethod
+    def add_symptom(
+        db: Session,
+        patient_id: str,
+        symptom: str,
+        description: str = None,
+        status: str = "active",
+        source: str = "manual"
+    ) -> Optional[Patient]:
+        """
+        Add a symptom record to patient
+
+        Args:
+            db: Database session
+            patient_id: Patient UUID
+            symptom: Symptom name
+            description: Symptom description (optional)
+            status: active/resolved/chronic
+            source: conversation/manual
+
+        Returns:
+            Updated Patient object or None
+        """
+        patient = PatientCRUD.get(db, patient_id)
+        if not patient:
+            return None
+
+        symptom_record = {
+            "timestamp": datetime.now().isoformat(),
+            "symptom": symptom,
+            "description": description,
+            "status": status,
+            "source": source
+        }
+
+        # Initialize list if None
+        if patient.symptoms is None:
+            patient.symptoms = []
+
+        patient.symptoms.append(symptom_record)
+        patient.updated_at = datetime.now()
+
+        # Flag the JSON field as modified for SQLAlchemy
+        flag_modified(patient, "symptoms")
+
+        db.commit()
+        db.refresh(patient)
+
+        return patient
+
+    @staticmethod
+    def get_symptoms(
+        db: Session,
+        patient_id: str,
+        start_time: datetime = None,
+        end_time: datetime = None,
+        status: str = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get patient symptom records with optional filters
+
+        Args:
+            db: Database session
+            patient_id: Patient UUID
+            start_time: Filter by start time (optional)
+            end_time: Filter by end time (optional)
+            status: Filter by status (optional)
+
+        Returns:
+            List of symptom records
+        """
+        patient = PatientCRUD.get(db, patient_id)
+        if not patient or not patient.symptoms:
+            return []
+
+        symptoms = patient.symptoms or []
+
+        # Time range filtering
+        if start_time:
+            start_iso = start_time.isoformat()
+            symptoms = [
+                s for s in symptoms 
+                if s.get("timestamp", "") >= start_iso
+            ]
+
+        if end_time:
+            end_iso = end_time.isoformat()
+            symptoms = [
+                s for s in symptoms 
+                if s.get("timestamp", "") <= end_iso
+            ]
+
+        # Status filtering
+        if status:
+            symptoms = [s for s in symptoms if s.get("status") == status]
+
+        # Sort by timestamp descending (newest first)
+        symptoms.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        return symptoms
+
+    @staticmethod
+    def update_symptom_status(
+        db: Session,
+        patient_id: str,
+        symptom: str,
+        status: str
+    ) -> Optional[Patient]:
+        """
+        Update status of a specific symptom
+
+        Args:
+            db: Database session
+            patient_id: Patient UUID
+            symptom: Symptom name to update
+            status: New status (active/resolved/chronic)
+
+        Returns:
+            Updated Patient object or None
+        """
+        patient = PatientCRUD.get(db, patient_id)
+        if not patient or not patient.symptoms:
+            return None
+
+        updated = False
+        for s in patient.symptoms:
+            if s.get("symptom") == symptom:
+                s["status"] = status
+                updated = True
+
+        if updated:
+            patient.updated_at = datetime.now()
+            flag_modified(patient, "symptoms")
+            db.commit()
+            db.refresh(patient)
+
+        return patient
+
+    @staticmethod
     def delete(db: Session, patient_id: str) -> bool:
         """
         Delete a patient (cascade deletes conversations and messages)
