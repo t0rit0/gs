@@ -23,20 +23,9 @@ from drhyper.utils.logging import get_logger, log_event
 logger = get_logger("MainAgentTools")
 
 
-@tool
-def get_next_diagnostic_question() -> str:
-    """
-    Get the next diagnostic question to ask the patient.
-
-    This tool is called by the agent node which has access to the full state.
-    The node function will update the state based on the result.
-
-    Returns:
-        Placeholder hint message (actual implementation will use entity_graph from state)
-    """
-    # This is a simplified tool version
-    # In the actual node function, we'll access state["entity_graph"].get_hint_message()
-    return "DIAGNOSTIC_QUESTION_PLACEHOLDER"
+# Note: get_next_diagnostic_question tool is not used directly.
+# The actual implementation is in get_next_diagnostic_question_node() function.
+# The tool decorator was removed to avoid confusion.
 
 
 @tool
@@ -137,18 +126,22 @@ async def get_next_diagnostic_question_node(state: Dict[str, Any]) -> Dict[str, 
         # Call EntityGraph.get_hint_message()
         hint_message, accomplish, log_messages = entity_graph.get_hint_message()
 
-        logger.info(f"[conv:{conversation_id[:8]}] Got hint: {hint_message[:100]}... accomplish={accomplish}")
-        log_event(logger, "HINT_GENERATED", f"Hint: {hint_message[:50]}...",
+        # Log complete hint message (not truncated) at INFO level
+        logger.info(f"[conv:{conversation_id[:8]}] Got hint message (length={len(hint_message) if hint_message else 0}): {hint_message}")
+        
+        # Log structured event with full hint
+        log_event(logger, "HINT_GENERATED", f"Hint generated (length={len(hint_message) if hint_message else 0})",
                  extra_data={
                      "conversation_id": conversation_id,
                      "accomplish": accomplish,
-                     "hint_length": len(hint_message) if hint_message else 0
+                     "hint_length": len(hint_message) if hint_message else 0,
+                     "hint_full": hint_message  # Full hint in structured log
                  })
 
         # Save EntityGraph state to database
         entity_graph_manager.save_state(state["conversation_id"])
         logger.debug(f"[conv:{conversation_id[:8]}] EntityGraph state saved")
-        
+
         elapsed = time.time() - start_time
         logger.debug(f"[conv:{conversation_id[:8]}] get_next_diagnostic_question_node completed in {elapsed:.2f}s")
 

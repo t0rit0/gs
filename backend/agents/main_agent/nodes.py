@@ -56,7 +56,7 @@ async def get_question_tool_node(state: MainAgentState) -> Dict[str, Any]:
     conversation_id = state.get("conversation_id", "unknown")
     logger.debug(f"[conv:{conversation_id[:8]}] get_question_tool_node started")
     start_time = time.time()
-    
+
     result = await tools.get_next_diagnostic_question_node(state)
     elapsed = time.time() - start_time
 
@@ -74,8 +74,11 @@ async def get_question_tool_node(state: MainAgentState) -> Dict[str, Any]:
     result["hint_message"] = hint
     # Don't set query_message or messages here - agent will generate them
     result["_route"] = "agent"
+
+    # Log complete hint message (not truncated)
+    logger.info(f"[conv:{conversation_id[:8]}] Got hint message (length={len(hint)}): {hint}")
+    logger.debug(f"[conv:{conversation_id[:8]}] Hint truncated preview: {hint[:100]}...")
     
-    logger.debug(f"[conv:{conversation_id[:8]}] Got hint: {hint[:50]}...")
     return result
 
 
