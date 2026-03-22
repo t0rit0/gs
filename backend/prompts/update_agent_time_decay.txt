@@ -1,0 +1,75 @@
+Task: Apply time decay to node confidence based on age
+
+Node Information:
+- node_id: {node_id}
+- node_type: {node_type} (metric/symptom/other)
+- node_name: {node_name}
+- last_updated: {last_updated}
+- current_confidence: {current_confidence}
+
+Time Decay Strategies:
+- vital_signs (Blood Pressure, Heart Rate): half_life=3 days, exponential decay
+- lab_metabolism (Glucose, HbA1c): half_life=30 days, exponential decay
+- symptom: half_life=7 days, step decay (0.8 per week)
+- other/default: half_life=14 days, exponential decay
+
+Decay Formulas:
+- Exponential: new_confidence = confidence * (0.5 ** (days_old / half_life))
+- Step (weekly): new_confidence = confidence * (0.8 ** weeks_old)
+
+IMPORTANT:
+- Confidence floor is 0.1 (never go below 0.1)
+- Use datetime.now() for current time calculation
+- DO NOT access entity_graph directly - use result variables only
+
+Generate Python code that:
+1. Calculates days_old from last_updated: days_old = (datetime.now() - last_updated).days
+2. Selects decay strategy based on node_type and node_name
+3. Applies the appropriate decay formula
+4. Enforces confidence floor at 0.1
+5. Sets result variables (DO NOT access entity_graph directly):
+   - result["new_confidence"] = calculated value
+
+CRITICAL RULES:
+1. DO NOT use 'return' statements - this code runs in exec(), not a function
+2. DO NOT access entity_graph directly
+3. Use result["new_confidence"] to pass the calculated value back
+
+Example output format:
+```python
+from datetime import datetime
+
+# Calculate days since last update
+days_old = (datetime.now() - last_updated).days
+
+# Select decay strategy based on node type and name
+node_name_lower = node_name.lower() if node_name else ""
+
+if node_type == "metric":
+    if any(k in node_name_lower for k in ["血压", "心率", "blood pressure", "heart rate"]):
+        # Vital signs: 3-day half-life
+        half_life = 3
+        new_confidence = current_confidence * (0.5 ** (days_old / half_life))
+    elif any(k in node_name_lower for k in ["血糖", "glucose", "hba1c"]):
+        # Lab metabolism: 30-day half-life
+        half_life = 30
+        new_confidence = current_confidence * (0.5 ** (days_old / half_life))
+    else:
+        # Default metric: 14-day half-life
+        half_life = 14
+        new_confidence = current_confidence * (0.5 ** (days_old / half_life))
+elif node_type == "symptom":
+    # Symptom: step decay (0.8 per week)
+    weeks_old = days_old // 7
+    new_confidence = current_confidence * (0.8 ** weeks_old)
+else:
+    # Default: 14-day half-life
+    half_life = 14
+    new_confidence = current_confidence * (0.5 ** (days_old / half_life))
+
+# Enforce confidence floor at 0.1
+new_confidence = max(0.1, new_confidence)
+
+# Set result variable (DO NOT update entity_graph directly)
+result["new_confidence"] = new_confidence
+```

@@ -159,14 +159,21 @@ def sidebar():
                                         messages = client.get_conversation_messages(conv_id)
 
                                         # Convert messages to display format
-                                        display_messages = [
-                                            {
-                                                "role": msg["role"],
+                                        # Backend uses 'human'/'ai', frontend expects 'user'/'assistant'
+                                        display_messages = []
+                                        for msg in messages:
+                                            role = msg["role"]
+                                            # Convert backend role to frontend role
+                                            if role == "human":
+                                                role = "user"
+                                            elif role == "ai":
+                                                role = "assistant"
+                                            
+                                            display_messages.append({
+                                                "role": role,
                                                 "content": msg["content"],
-                                                "timestamp": msg["timestamp"]
-                                            }
-                                            for msg in messages
-                                        ]
+                                                "timestamp": msg.get("timestamp") or msg.get("created_at")
+                                            })
 
                                         load_conversation(conv_id, display_messages, patient)
                                         st.rerun()

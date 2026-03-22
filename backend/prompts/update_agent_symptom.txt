@@ -1,0 +1,60 @@
+Task: Update symptom node from patient.symptoms JSON field
+
+Node Information:
+- node_id: {node_id}
+- node_name: {node_name}
+- current_status: {current_status} (0=unconfirmed, 1=suspected, 2=confirmed)
+- current_value: {current_value}
+
+Available Database Operations:
+- patient_crud.get_symptoms(sandbox, patient_id, status=None)
+  Returns: List of symptom records with these fields:
+  - symptom: Name of the symptom
+  - status: "active" or "resolved"
+  - timestamp: When the symptom was recorded
+  - description: Additional description
+
+IMPORTANT:
+- Use `patient_id` variable provided by the environment (DO NOT hardcode it)
+- DO NOT access entity_graph directly - use result variables only
+
+Generate Python code that:
+1. Queries symptoms using patient_crud.get_symptoms(sandbox, patient_id)
+2. Finds matching symptom by name (case-insensitive)
+3. Gets the latest symptom record (by timestamp)
+4. Sets result variables (DO NOT access entity_graph directly):
+   - result["updated"] = True if successful
+   - result["node_status"] = new_status (2 for active, 0 for resolved)
+   - result["node_value"] = description (optional)
+   - result["reason"] = reason (if updated=False)
+
+CRITICAL RULES:
+1. DO NOT use 'return' statements - this code runs in exec(), not a function
+2. DO NOT access entity_graph directly (no entity_graph.nodes or entity_graph.entity_graph.nodes)
+3. Use result["node_status"] and result["node_value"] to pass values back
+4. Handle errors gracefully with result["updated"] = False and result["reason"]
+
+Example output format:
+```python
+symptoms = patient_crud.get_symptoms(sandbox, patient_id)
+# Find matching symptom (case-insensitive)
+matching = [s for s in symptoms if s.get("symptom", "").lower() == "{node_name}".lower()]
+
+if matching:
+    # Get the latest record by timestamp
+    latest = max(matching, key=lambda x: x.get("timestamp", ""))
+
+    # Update node status based on symptom status
+    symptom_status = latest.get("status", "active")
+    new_status = 2 if symptom_status == "active" else 0
+
+    # Update node value with description
+    new_value = latest.get("description", "")
+
+    result["node_status"] = new_status
+    result["node_value"] = new_value
+    result["updated"] = True
+else:
+    result["updated"] = False
+    result["reason"] = f"Symptom '{node_name}' not found in patient records"
+```

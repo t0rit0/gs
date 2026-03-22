@@ -1,0 +1,101 @@
+Task: Update health metric node with latest database record
+
+Node Information:
+- node_id: {node_id}
+- node_name: {node_name}
+- metric_name: {metric_name}
+- current_value: {current_value}
+
+Database Metadata (for this patient):
+{metric_metadata}
+
+Available Database Operations:
+- MetricCRUD.get_latest_record(sandbox, patient_id, metric_name)
+  Returns: HealthMetricRecord with these fields:
+  - value_string: String representation (e.g., "145/92" for BP)
+  - value_numeric: Numeric value (for single-value metrics)
+  - component_1_name, component_1_value: First component (e.g., Systolic)
+  - component_2_name, component_2_value: Second component (e.g., Diastolic)
+  - unit: Unit of measurement
+  - measured_at: When the measurement was taken
+  - context: Additional context (e.g., "morning_reading")
+
+IMPORTANT:
+- Use `patient_id` variable provided by the environment (DO NOT hardcode it)
+- DO NOT access entity_graph directly - use result variables only
+
+Generate Python code that:
+1. Queries latest record using MetricCRUD.get_latest_record(sandbox, patient_id, "{metric_name}")
+2. Extracts the appropriate value based on the metadata above
+3. Sets result variables:
+   - result["updated"] = True if successful
+   - result["node_value"] = new_value
+   - result["node_status"] = confidence level (dynamically set based on data quality)
+   - result["measured_at"] = measured_at (optional)
+   - result["reason"] = reason (if updated=False)
+
+Node Status Guidelines (set DYNAMICALLY based on runtime data):
+- status = 2 (high confidence): Record found AND data is valid AND meets requirements
+- status = 1 (low confidence): Record found BUT has issues (old, incomplete, time mismatch, etc.)
+- status = 0 (unknown): No record found OR data is invalid/missing
+
+Your code should CHECK at runtime and SET status accordingly:
+- Check if record exists
+- Check if value is valid (not empty/null)
+- Check if record is recent enough (compare measured_at with current time)
+- Check if record time matches node expectation (morning/evening if relevant)
+- Check if record meets node-specific requirements
+
+CRITICAL RULES:
+1. DO NOT use 'return' statements
+2. DO NOT access entity_graph directly
+3. ALWAYS set result["node_status"] dynamically based on runtime checks
+4. Handle errors gracefully
+
+Example output format:
+```python
+from datetime import datetime, timedelta
+
+# Query the latest record
+record = MetricCRUD.get_latest_record(sandbox, patient_id, "Blood Pressure")
+
+# Check if record exists and has valid value
+if record:
+    if record.value_string and record.value_string.strip():
+        new_value = record.value_string
+        
+        # DYNAMICALLY determine status based on data quality
+        status = 2  # Default to high confidence
+        
+        # Check if record is too old (older than 30 days)
+        try:
+            record_date = datetime.fromisoformat(record.measured_at)
+            days_old = (datetime.now() - record_date).days
+            if days_old > 30:
+                status = 1  # Old data, reduce confidence
+        except:
+            status = 1  # Can't parse date, reduce confidence
+        
+        # Set result variables
+        result["node_value"] = new_value
+        result["node_status"] = status  # Set dynamically based on checks above
+        result["measured_at"] = record.measured_at.isoformat()
+        result["updated"] = True
+        
+    elif record.value_numeric is not None:
+        # Value string is empty, fallback to numeric
+        result["node_value"] = str(record.value_numeric)
+        result["node_status"] = 1  # Had to use fallback, lower confidence
+        result["updated"] = True
+        
+    else:
+        # Record exists but no valid value
+        result["node_status"] = 0
+        result["updated"] = False
+        result["reason"] = "Record exists but value is missing or invalid"
+else:
+    # No record found
+    result["node_status"] = 0
+    result["updated"] = False
+    result["reason"] = "No records found for this metric"
+```

@@ -389,17 +389,32 @@ async def get_patient_conversations(
     db: Session = Depends(get_db)
 ):
     """
-    Get all conversations for a patient
+    Get all conversations for a patient with message counts
 
     Supports pagination
     """
-    from backend.database.crud import conversation_crud
+    from backend.database.crud import conversation_crud, message_crud
 
     conversations, total = conversation_crud.list_by_patient(
         db, patient_id, skip, limit
     )
 
-    return conversations
+    # Add message count to each conversation
+    result = []
+    for conv in conversations:
+        conv_dict = {
+            "conversation_id": conv.conversation_id,
+            "patient_id": conv.patient_id,
+            "target": conv.target,
+            "model_type": conv.model_type,
+            "status": conv.status,
+            "created_at": conv.created_at.isoformat() if conv.created_at else None,
+            "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+            "message_count": message_crud.count_by_conversation(db, conv.conversation_id)
+        }
+        result.append(conv_dict)
+
+    return result
 
 
 @app.delete(
@@ -534,7 +549,7 @@ async def create_agent_conversation(
         )
 
         # Create database record
-        from backend.database.crud import conversation_crud
+        from backend.database.crud import conversation_crud, message_crud
         import datetime
 
         db_conv = conversation_crud.create(db, {
@@ -545,6 +560,15 @@ async def create_agent_conversation(
             "created_at": datetime.datetime.now(datetime.UTC),
             "updated_at": datetime.datetime.now(datetime.UTC)
         })
+
+        # Save first message to database
+        from backend.database.schemas import MessageCreate
+        message_crud.create(db, MessageCreate(
+            conversation_id=conversation_id,
+            role="ai",  # Use 'ai' not 'assistant'
+            content=first_message,
+            created_at=datetime.datetime.now(datetime.UTC)
+        ))
 
         logger.info(f"Created MainAgent conversation: {conversation_id}")
 
@@ -584,7 +608,10 @@ async def agent_chat(
     """
     try:
         # Verify conversation exists
-        from backend.database.crud import conversation_crud
+        from backend.database.crud import conversation_crud, message_crud
+        from backend.database.schemas import MessageCreate
+        import datetime
+
         conv = conversation_crud.get(db, conversation_id)
         if not conv:
             raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
@@ -597,6 +624,22 @@ async def agent_chat(
             conversation_id=conversation_id,
             user_message=request.message
         )
+
+        # Save user message to database
+        message_crud.create(db, MessageCreate(
+            conversation_id=conversation_id,
+            role="human",  # Use 'human' not 'user'
+            content=request.message,
+            created_at=datetime.datetime.now(datetime.UTC)
+        ))
+
+        # Save AI message to database
+        message_crud.create(db, MessageCreate(
+            conversation_id=conversation_id,
+            role="ai",  # Use 'ai' not 'assistant'
+            content=ai_message,
+            created_at=datetime.datetime.now(datetime.UTC)
+        ))
 
         # Check for pending operations
         has_pending = agent.has_pending_operations(conversation_id)

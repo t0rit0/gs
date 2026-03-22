@@ -22,6 +22,7 @@ from drhyper.utils.llm_loader import load_chat_model
 from drhyper.config.settings import ConfigManager as DrHyperConfig
 from backend.config.config_manager import get_config
 from backend.services.symptom_extractor import SymptomExtractorFactory
+from backend.services.time_decay_executor import TimeDecayExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,55 @@ class EntityGraphManager:
 
         logger.info(f"Updated patient {patient_id} with {len(new_symptoms)} symptoms")
 
+    def _apply_updates_to_graph(
+        self,
+        entity_graph,
+        patient_id: str,
+        conversation_id: str
+    ) -> None:
+        """
+        Apply UpdateAgent updates to EntityGraph nodes
+        
+        This method:
+        1. Uses UpdateAgent to update metric nodes from database
+        2. Updates symptom nodes from patient.symptoms
+        3. Applies time decay to all nodes
+        
+        Args:
+            entity_graph: EntityGraph instance
+            patient_id: Patient identifier
+            conversation_id: Conversation identifier (for logging)
+        """
+        try:
+            logger.info(f"[conv:{conversation_id[:8]}] Applying UpdateAgent updates to EntityGraph")
+            
+            # Import UpdateAgent here to avoid circular imports
+            from backend.services.update_agent import UpdateAgent
+            
+            # Create UpdateAgent with database session
+            with SessionLocal() as db:
+                update_agent = UpdateAgent(db)
+                
+                # Update all nodes (metrics, symptoms, time decay)
+                stats = update_agent.update_all_nodes(entity_graph, patient_id)
+                
+                logger.info(
+                    f"[conv:{conversation_id[:8]}] UpdateAgent complete: "
+                    f"{stats['metric_updated']} metrics updated, "
+                    f"{stats['symptom_updated']} symptoms updated, "
+                    f"{stats['time_decay_applied']} nodes with time decay applied"
+                )
+        
+        except Exception as e:
+            logger.error(f"[conv:{conversation_id[:8]}] Error applying UpdateAgent updates: {e}")
+            # Apply time decay even if UpdateAgent fails
+            try:
+                decay_executor = TimeDecayExecutor()
+                decay_executor.apply_decay_to_all_nodes(entity_graph)
+                logger.info(f"[conv:{conversation_id[:8]}] Time decay applied (UpdateAgent failed)")
+            except Exception as decay_error:
+                logger.error(f"[conv:{conversation_id[:8]}] Error applying time decay: {decay_error}")
+
     def invalidate(self, conversation_id: str) -> None:
         """
         Remove EntityGraph from cache (e.g., when conversation ends)
@@ -307,6 +357,9 @@ class EntityGraphManager:
 
         # Initialize EntityGraph with patient context
         entity_graph.init(save=False, patient_context=patient_context_dict)
+
+        # Apply UpdateAgent to refresh metric and symptom nodes from database
+        self._apply_updates_to_graph(entity_graph, patient_id, conversation_id)
 
         node_count = entity_graph.entity_graph.number_of_nodes()
         logger.info(f"EntityGraph created and initialized for: {conversation_id} with {node_count} nodes")

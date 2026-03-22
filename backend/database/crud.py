@@ -750,6 +750,35 @@ class MessageCRUD:
         conversation_id: str
     ) -> List[Message]:
         """
+        Get all messages in a conversation ordered by turn_number
+
+        Args:
+            db: Database session
+            conversation_id: Conversation UUID
+
+        Returns:
+            List of Message objects
+        """
+        return db.query(Message).filter(
+            Message.conversation_id == conversation_id
+        ).order_by(Message.turn_number.asc()).all()
+
+    @staticmethod
+    def count_by_conversation(db: Session, conversation_id: str) -> int:
+        """
+        Count messages in a conversation
+
+        Args:
+            db: Database session
+            conversation_id: Conversation UUID
+
+        Returns:
+            Message count
+        """
+        return db.query(Message).filter(
+            Message.conversation_id == conversation_id
+        ).count()
+        """
         Get all messages for a conversation (ordered by turn number)
 
         Args:

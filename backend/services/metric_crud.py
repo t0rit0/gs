@@ -6,11 +6,101 @@ Health Metrics Storage and Tracking - Week 7 Implementation
 from typing import List, Optional, Any, Dict
 from datetime import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy import func, distinct
 from backend.database.models import HealthMetricRecord
 
 
 class MetricCRUD:
     """CRUD operations for health metrics"""
+
+    @staticmethod
+    def get_metric_metadata(db: Session, patient_id: str, metric_name: str = None) -> Dict[str, Any]:
+        """
+        Get metadata about available metrics for dynamic context
+
+        Returns information about:
+        - Available columns/fields for the metric
+        - Date range of available data
+        - Record count
+        - Value types available
+
+        Args:
+            db: Database session
+            patient_id: Patient identifier
+            metric_name: Optional metric name filter
+
+        Returns:
+            Dictionary with metric metadata
+        """
+        query = db.query(HealthMetricRecord).filter(
+            HealthMetricRecord.patient_id == patient_id
+        )
+
+        if metric_name:
+            query = query.filter(HealthMetricRecord.metric_name == metric_name)
+
+        # Get basic stats
+        record_count = query.count()
+
+        if record_count == 0:
+            return {
+                "available": False,
+                "message": f"No metric records found for patient {patient_id}"
+            }
+
+        # Get date range
+        date_range = db.query(
+            func.min(HealthMetricRecord.measured_at),
+            func.max(HealthMetricRecord.measured_at)
+        ).filter(
+            HealthMetricRecord.patient_id == patient_id
+        ).first()
+
+        # Get available fields (non-None columns)
+        sample_records = query.limit(10).all()
+
+        available_fields = set()
+        value_types = set()
+
+        for record in sample_records:
+            if record.value_numeric is not None:
+                available_fields.add("value_numeric")
+                value_types.add("numeric")
+            if record.value_string is not None:
+                available_fields.add("value_string")
+                value_types.add("string")
+            if record.component_1_name:
+                available_fields.add("component_1_name")
+                available_fields.add("component_1_value")
+            if record.component_2_name:
+                available_fields.add("component_2_name")
+                available_fields.add("component_2_value")
+            if record.unit:
+                available_fields.add("unit")
+            if record.context:
+                available_fields.add("context")
+
+        # Get unique metric names if no filter
+        if metric_name:
+            unique_metrics = [metric_name]
+        else:
+            unique_metrics = [
+                m[0] for m in db.query(distinct(HealthMetricRecord.metric_name))
+                .filter(HealthMetricRecord.patient_id == patient_id).all()
+            ]
+
+        return {
+            "available": True,
+            "record_count": record_count,
+            "date_range": {
+                "earliest": date_range[0].isoformat() if date_range[0] else None,
+                "latest": date_range[1].isoformat() if date_range[1] else None
+            },
+            "available_fields": list(available_fields),
+            "value_types": list(value_types),
+            "unique_metrics": unique_metrics,
+            "sample_size": len(sample_records)
+        }
     
     @staticmethod
     def create_record(
