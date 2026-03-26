@@ -451,19 +451,39 @@ Your question:"""
         logger.info(f"[conv:{conversation_id[:8]}] Processing user message: {user_message[:50]}...")
         log_event(logger, "USER_MESSAGE_RECEIVED", f"User: {user_message[:50]}...",
                  extra_data={"conversation_id": conversation_id})
-        
+
         start_time = time.time()
         config = {"configurable": {"thread_id": conversation_id}}
 
-        # Add user message to state AND set human_message for routing
+        # Get existing state from checkpointer to preserve conversation_id and patient_id
+        logger.debug(f"Fetching existing state from checkpointer")
+        existing_state = await self.checkpointer.aget(config)
+        
+        # Build state with existing values preserved
+        invoke_state = {
+            "messages": [HumanMessage(content=user_message)],
+            "human_message": user_message,
+        }
+        
+        # Preserve existing state values if available
+        if existing_state:
+            if "conversation_id" in existing_state:
+                invoke_state["conversation_id"] = existing_state["conversation_id"]
+            if "patient_id" in existing_state:
+                invoke_state["patient_id"] = existing_state["patient_id"]
+            if "accomplish" in existing_state:
+                invoke_state["accomplish"] = existing_state["accomplish"]
+            if "report" in existing_state:
+                invoke_state["report"] = existing_state["report"]
+            if "last_hint" in existing_state:
+                invoke_state["last_hint"] = existing_state["last_hint"]
+            if "hint_message" in existing_state:
+                invoke_state["hint_message"] = existing_state["hint_message"]
+            if "query_message" in existing_state:
+                invoke_state["query_message"] = existing_state["query_message"]
+        
         logger.debug(f"Invoking LangGraph with user message")
-        result = await self.graph.ainvoke(
-            {
-                "messages": [HumanMessage(content=user_message)],
-                "human_message": user_message  # Set for routing_node to check
-            },
-            config
-        )
+        result = await self.graph.ainvoke(invoke_state, config)
         
         elapsed = time.time() - start_time
 
